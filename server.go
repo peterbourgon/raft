@@ -60,29 +60,11 @@ func (s *serverState) Set(value string) {
 	s.value = value
 }
 
-// serverTerm is just a uint64 protected by a mutex.
-type serverTerm struct {
-	sync.RWMutex
-	value uint64
-}
-
-func (s *serverTerm) Get() uint64 {
-	s.RLock()
-	defer s.RUnlock()
-	return s.value
-}
-
-func (s *serverTerm) Increment() {
-	s.Lock()
-	defer s.Unlock()
-	s.value++
-}
-
 // Server is the agent that performs all of the Raft protocol logic.
 // In a typical application, each running process that wants to be part of
-// the distributed state machine will contain a Server component.
+// the distributed state machine will contain a server component.
 type Server struct {
-	Id                uint64 // of this server, for elections and redirects
+	Id                uint64 // id of this server (do not modify)
 	state             *serverState
 	term              uint64 // "current term number, which increases monotonically"
 	vote              uint64 // who we voted for this term, if applicable
@@ -94,11 +76,11 @@ type Server struct {
 	electionTick      <-chan time.Time
 }
 
-// NewServer returns an initialized, un-started Server.
+// NewServer returns an initialized, un-started server.
 // The ID must be unique in the Raft network, and greater than 0.
 // The store will be used by the distributed log as a persistence layer.
 // The apply function will be called whenever a (user-domain) command has been
-// safely replicated to this Server, and should be applied.
+// safely replicated to this server, and can be considered committed.
 func NewServer(id uint64, store io.Writer, apply func([]byte) ([]byte, error)) *Server {
 	if id <= 0 {
 		panic("server id must be > 0")
@@ -118,19 +100,19 @@ func NewServer(id uint64, store io.Writer, apply func([]byte) ([]byte, error)) *
 	return s
 }
 
-// SetPeers injects the set of Peers that this server will attempt to
-// communicate with, in its Raft network. The set Peers should include a Peer
-// that represents this server, so that Quorum is calculated correctly.
+// SetPeers injects the set of peers that this server will attempt to
+// communicate with, in its Raft network. The set peers should include a peer
+// that represents this server, so that quorum is calculated correctly.
 func (s *Server) SetPeers(p Peers) {
 	s.peers = p
 }
 
-// State returns the current state: Follower, Candidate, or Leader.
+// State returns the current state: follower, candidate, or leader.
 func (s *Server) State() string {
 	return s.state.Get()
 }
 
-// Start triggers the Server to begin communicating with its peers.
+// Start triggers the server to begin communicating with its peers.
 func (s *Server) Start() {
 	go s.loop()
 }
@@ -164,7 +146,8 @@ func (s *Server) Command(cmd []byte) ([]byte, error) {
 }
 
 // AppendEntries processes the given RPC and returns the response.
-// This is a public method only to facilitate the construction of Peers
+//
+// This is a public method only to facilitate the construction of peers
 // on arbitrary transports.
 func (s *Server) AppendEntries(ae AppendEntries) AppendEntriesResponse {
 	t := appendEntriesTuple{
@@ -176,6 +159,7 @@ func (s *Server) AppendEntries(ae AppendEntries) AppendEntriesResponse {
 }
 
 // RequestVote processes the given RPC and returns the response.
+//
 // This is a public method only to facilitate the construction of Peers
 // on arbitrary transports.
 func (s *Server) RequestVote(rv RequestVote) RequestVoteResponse {
@@ -412,14 +396,14 @@ func (ni *nextIndex) Set(id, index uint64) {
 	ni.m[id] = index
 }
 
-// Flush generates and forwards an AppendEntries request that attempts to bring
+// flush generates and forwards an AppendEntries request that attempts to bring
 // the given follower "in sync" with our log. It's idempotent, so it's used for
 // both heartbeats and replicating commands.
 //
 // The AppendEntries request we build represents our best attempt at a "delta"
 // between our log and the follower's log. The passed nextIndex structure
 // manages that state.
-func (s *Server) Flush(peer Peer, ni *nextIndex) error {
+func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	peerId := peer.Id()
 	currentTerm := s.term
 	prevLogIndex := ni.PrevLogIndex(peerId)
@@ -479,7 +463,7 @@ func (s *Server) leaderSelect() {
 			responses := make(chan error, len(s.peers))
 			for _, peer := range s.peers.Except(s.Id) {
 				go func(peer0 Peer) {
-					err := s.Flush(peer0, ni)
+					err := s.flush(peer0, ni)
 					if err != nil {
 						s.logGeneric("replicate: flush to %d: %s", peer0.Id(), err)
 					}
@@ -522,7 +506,7 @@ func (s *Server) leaderSelect() {
 				}
 				// Push out another update, to sync that commit
 				for _, peer := range s.peers.Except(s.Id) {
-					s.Flush(peer, ni) // TODO I think this is OK?
+					s.flush(peer, ni) // TODO should this be parallelized?
 				}
 				commandTuple.Response <- []byte{} // TODO actual response
 				continue
@@ -537,7 +521,7 @@ func (s *Server) leaderSelect() {
 			for _, peer := range recipients {
 				go func(peer0 Peer) {
 					defer wg.Done()
-					err := s.Flush(peer0, ni)
+					err := s.flush(peer0, ni)
 					if err != nil {
 						s.logGeneric(
 							"heartbeat: flush to %d: %s (nextIndex now %d)",
