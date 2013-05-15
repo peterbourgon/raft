@@ -16,7 +16,7 @@ const (
 	Leader    = "Leader"
 )
 
-const (
+var (
 	MinimumElectionTimeoutMs = 250
 )
 
@@ -26,12 +26,17 @@ var (
 	ErrAppendEntriesRejected = errors.New("AppendEntries RPC rejected")
 )
 
+// ElectionTimeout returns a variable time.Duration, between
+// MinimumElectionTimeoutMs and twice that value.
 func ElectionTimeout() time.Duration {
 	n := rand.Intn(MinimumElectionTimeoutMs)
 	d := MinimumElectionTimeoutMs + n
 	return time.Duration(d) * time.Millisecond
 }
 
+// BroadcastInterval returns the interval between heartbeats (AppendEntry RPCs)
+// broadcast from the leader. It is MinimumElectionTimeoutMs / 10, as dictated
+// by the spec: BroadcastInterval << ElectionTimeout << MTBF.
 func BroadcastInterval() time.Duration {
 	d := MinimumElectionTimeoutMs / 10
 	return time.Duration(d) * time.Millisecond
@@ -54,6 +59,9 @@ func (s *concurrentState) Set(value string) {
 	s.value = value
 }
 
+// Server is the agent that performs all of the Raft protocol logic.
+// In a typical application, each running process that wants to be part of
+// the distributed state machine will contain a Server component.
 type Server struct {
 	Id                uint64 // of this server, for elections and redirects
 	State             *concurrentState
@@ -67,6 +75,11 @@ type Server struct {
 	electionTick      <-chan time.Time
 }
 
+// NewServer returns an initialized, un-started Server.
+// The ID must be unique in the Raft network, and greater than 0.
+// The store will be used by the distributed log as a persistence layer.
+// The apply function will be called whenever a (user-domain) command has been
+// safely replicated to this Server, and should be applied.
 func NewServer(id uint64, store io.Writer, apply func([]byte) ([]byte, error)) *Server {
 	if id <= 0 {
 		panic("server id must be > 0")
@@ -86,19 +99,30 @@ func NewServer(id uint64, store io.Writer, apply func([]byte) ([]byte, error)) *
 	return s
 }
 
+// SetPeers injects the set of Peers that this server will attempt to
+// communicate with, in its Raft network. The set Peers should include a Peer
+// that represents this server, so that Quorum is calculated correctly.
+func (s *Server) SetPeers(p Peers) {
+	s.peers = p
+}
+
+// Start triggers the Server to begin communicating with its peers.
 func (s *Server) Start() {
 	go s.loop()
 }
 
-// TODO Command accepts client commands, which will (hopefully) get replicated
-// across all state machines. Note that Command is completely out-of-band of
-// Raft-domain RPC.
 type commandTuple struct {
 	Command  []byte
 	Response chan []byte
 	Err      chan error
 }
 
+// Command pushes a state-machine command through the Raft network.
+// Once Raft has decided it's been safely replicated, the command is applied
+// (via the apply function, passed at Server instantiation) and this function
+// returns.
+//
+// Note that per Raft semantics, Command may block for some time.
 func (s *Server) Command(cmd []byte) ([]byte, error) {
 	t := commandTuple{cmd, make(chan []byte), make(chan error)}
 	s.commandChan <- t
@@ -110,6 +134,9 @@ func (s *Server) Command(cmd []byte) ([]byte, error) {
 	}
 }
 
+// AppendEntries processes the given RPC and returns the response.
+// This is a public method only to facilitate the construction of Peers
+// on arbitrary transports.
 func (s *Server) AppendEntries(ae AppendEntries) AppendEntriesResponse {
 	t := appendEntriesTuple{
 		Request:  ae,
@@ -119,6 +146,9 @@ func (s *Server) AppendEntries(ae AppendEntries) AppendEntriesResponse {
 	return <-t.Response
 }
 
+// RequestVote processes the given RPC and returns the response.
+// This is a public method only to facilitate the construction of Peers
+// on arbitrary transports.
 func (s *Server) RequestVote(rv RequestVote) RequestVoteResponse {
 	t := requestVoteTuple{
 		Request:  rv,
@@ -126,10 +156,6 @@ func (s *Server) RequestVote(rv RequestVote) RequestVoteResponse {
 	}
 	s.requestVoteChan <- t
 	return <-t.Response
-}
-
-func (s *Server) SetPeers(p Peers) {
-	s.peers = p
 }
 
 //                                  times out,
