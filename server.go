@@ -42,21 +42,40 @@ func BroadcastInterval() time.Duration {
 	return time.Duration(d) * time.Millisecond
 }
 
-type concurrentState struct {
+// serverState is just a string protected by a mutex.
+type serverState struct {
 	sync.RWMutex
 	value string
 }
 
-func (s *concurrentState) Get() string {
+func (s *serverState) Get() string {
 	s.RLock()
 	defer s.RUnlock()
 	return s.value
 }
 
-func (s *concurrentState) Set(value string) {
+func (s *serverState) Set(value string) {
 	s.Lock()
 	defer s.Unlock()
 	s.value = value
+}
+
+// serverTerm is just a uint64 protected by a mutex.
+type serverTerm struct {
+	sync.RWMutex
+	value uint64
+}
+
+func (s *serverTerm) Get() uint64 {
+	s.RLock()
+	defer s.RUnlock()
+	return s.value
+}
+
+func (s *serverTerm) Increment() {
+	s.Lock()
+	defer s.Unlock()
+	s.value++
 }
 
 // Server is the agent that performs all of the Raft protocol logic.
@@ -64,10 +83,10 @@ func (s *concurrentState) Set(value string) {
 // the distributed state machine will contain a Server component.
 type Server struct {
 	Id                uint64 // of this server, for elections and redirects
-	State             *concurrentState
-	Term              uint64 // "current term number, which increases monotonically"
+	state             *serverState
+	term              uint64 // "current term number, which increases monotonically"
 	vote              uint64 // who we voted for this term, if applicable
-	Log               *Log
+	log               *Log
 	peers             Peers
 	appendEntriesChan chan appendEntriesTuple
 	requestVoteChan   chan requestVoteTuple
@@ -87,9 +106,9 @@ func NewServer(id uint64, store io.Writer, apply func([]byte) ([]byte, error)) *
 
 	s := &Server{
 		Id:                id,
-		State:             &concurrentState{value: Follower}, // "when servers start up they begin as followers"
-		Term:              1,                                 // TODO is this correct?
-		Log:               NewLog(store, apply),
+		state:             &serverState{value: Follower}, // "when servers start up they begin as followers"
+		term:              1,                             // TODO is this correct?
+		log:               NewLog(store, apply),
 		peers:             nil,
 		appendEntriesChan: make(chan appendEntriesTuple),
 		requestVoteChan:   make(chan requestVoteTuple),
@@ -104,6 +123,11 @@ func NewServer(id uint64, store io.Writer, apply func([]byte) ([]byte, error)) *
 // that represents this server, so that Quorum is calculated correctly.
 func (s *Server) SetPeers(p Peers) {
 	s.peers = p
+}
+
+// State returns the current state: Follower, Candidate, or Leader.
+func (s *Server) State() string {
+	return s.state.Get()
 }
 
 // Start triggers the Server to begin communicating with its peers.
@@ -122,7 +146,12 @@ type commandTuple struct {
 // (via the apply function, passed at Server instantiation) and this function
 // returns.
 //
-// Note that per Raft semantics, Command may block for some time.
+// Note that per Raft semantics, this method may block for some time, and can
+// appear to fail (via a timeout) if we don't reach a quorum. But once the
+// command is registered with the leader, Raft will try to replicate it to all
+// servers, and won't give up until it succeeds. So, while Raft does guarantee
+// command order from the perspective of the leader, the safest bet is to
+// structure your commands so that they're idempotent.
 func (s *Server) Command(cmd []byte) ([]byte, error) {
 	t := commandTuple{cmd, make(chan []byte), make(chan error)}
 	s.commandChan <- t
@@ -178,7 +207,7 @@ func (s *Server) RequestVote(rv RequestVote) RequestVoteResponse {
 
 func (s *Server) loop() {
 	for {
-		switch s.State.Get() {
+		switch state := s.State(); state {
 		case Follower:
 			s.followerSelect()
 		case Candidate:
@@ -186,7 +215,7 @@ func (s *Server) loop() {
 		case Leader:
 			s.leaderSelect()
 		default:
-			panic(fmt.Sprintf("unknown Server State '%s'", s.State))
+			panic(fmt.Sprintf("unknown Server State '%s'", state))
 		}
 	}
 }
@@ -196,7 +225,7 @@ func (s *Server) resetElectionTimeout() {
 }
 
 func (s *Server) logGeneric(format string, args ...interface{}) {
-	prefix := fmt.Sprintf("id=%d term=%d state=%s: ", s.Id, s.Term, s.State.Get())
+	prefix := fmt.Sprintf("id=%d term=%d state=%s: ", s.Id, s.term, s.State())
 	log.Printf(prefix+format, args...)
 }
 
@@ -233,8 +262,8 @@ func (s *Server) followerSelect() {
 			// 5.2 Leader election: "A follower increments its current term and
 			// transitions to candidate state."
 			s.logGeneric("election timeout, becoming candidate")
-			s.Term++
-			s.State.Set(Candidate)
+			s.term++
+			s.state.Set(Candidate)
 			s.resetElectionTimeout()
 			return
 
@@ -258,10 +287,10 @@ func (s *Server) candidateSelect() {
 	// response arrives or the election concludes."
 
 	responses, canceler := s.peers.Except(s.Id).RequestVotes(RequestVote{
-		Term:         s.Term,
+		Term:         s.term,
 		CandidateId:  s.Id,
-		LastLogIndex: s.Log.LastIndex(),
-		LastLogTerm:  s.Log.LastTerm(),
+		LastLogIndex: s.log.LastIndex(),
+		LastLogTerm:  s.log.LastTerm(),
 	})
 	defer canceler.Cancel()
 	votesReceived := 1 // already have a vote from myself
@@ -271,7 +300,7 @@ func (s *Server) candidateSelect() {
 	// catch a bad state
 	if votesReceived >= votesRequired {
 		s.logGeneric("%d-node cluster; I win", s.peers.Count())
-		s.State.Set(Leader)
+		s.state.Set(Leader)
 		return
 	}
 
@@ -288,8 +317,8 @@ func (s *Server) candidateSelect() {
 			s.logGeneric("got vote: term=%d granted=%v", r.Term, r.VoteGranted)
 			// "A candidate wins the election if it receives votes from a
 			// majority of servers in the full cluster for the same term."
-			if r.Term != s.Term {
-				// TODO what if r.Term > s.Term? do we lose the election?
+			if r.Term != s.term {
+				// TODO what if r.Term > s.term? do we lose the election?
 				continue
 			}
 			if r.VoteGranted {
@@ -298,7 +327,7 @@ func (s *Server) candidateSelect() {
 			// "Once a candidate wins an election, it becomes leader."
 			if votesReceived >= votesRequired {
 				s.logGeneric("%d >= %d: win", votesReceived, votesRequired)
-				s.State.Set(Leader)
+				s.state.Set(Leader)
 				return // win
 			}
 
@@ -314,7 +343,7 @@ func (s *Server) candidateSelect() {
 			t.Response <- resp
 			if stepDown {
 				s.logGeneric("stepping down to Follower")
-				s.State.Set(Follower)
+				s.state.Set(Follower)
 				return // lose
 			}
 
@@ -325,7 +354,7 @@ func (s *Server) candidateSelect() {
 			t.Response <- resp
 			if stepDown {
 				s.logGeneric("stepping down to Follower")
-				s.State.Set(Follower)
+				s.state.Set(Follower)
 				return // lose
 			}
 
@@ -392,10 +421,10 @@ func (ni *nextIndex) Set(id, index uint64) {
 // manages that state.
 func (s *Server) Flush(peer Peer, ni *nextIndex) error {
 	peerId := peer.Id()
-	currentTerm := s.Term
+	currentTerm := s.term
 	prevLogIndex := ni.PrevLogIndex(peerId)
-	entries, prevLogTerm := s.Log.EntriesAfter(prevLogIndex, currentTerm)
-	commitIndex := s.Log.CommitIndex()
+	entries, prevLogTerm := s.log.EntriesAfter(prevLogIndex, currentTerm)
+	commitIndex := s.log.CommitIndex()
 	resp := peer.AppendEntries(AppendEntries{
 		Term:         currentTerm,
 		LeaderId:     s.Id,
@@ -423,20 +452,20 @@ func (s *Server) leaderSelect() {
 	// which is the index of the next log entry the leader will send to that
 	// follower. When a leader first comes to power it initializes all nextIndex
 	// values to the index just after the last one in its log."
-	ni := newNextIndex(s.peers, s.Log.LastIndex()+1)
+	ni := newNextIndex(s.peers, s.log.LastIndex()+1)
 
 	heartbeatTick := time.Tick(BroadcastInterval())
 	for {
 		select {
 		case commandTuple := <-s.commandChan:
 			// Append the command to our (leader) log
-			currentTerm := s.Term
+			currentTerm := s.term
 			entry := LogEntry{
-				Index:   s.Log.LastIndex() + 1,
+				Index:   s.log.LastIndex() + 1,
 				Term:    currentTerm,
 				Command: commandTuple.Command,
 			}
-			if err := s.Log.AppendEntry(entry); err != nil {
+			if err := s.log.AppendEntry(entry); err != nil {
 				commandTuple.Err <- err
 				continue
 			}
@@ -488,7 +517,7 @@ func (s *Server) leaderSelect() {
 				continue
 			case <-committed:
 				// Commit our local log
-				if err := s.Log.CommitTo(entry.Index); err != nil {
+				if err := s.log.CommitTo(entry.Index); err != nil {
 					panic(err)
 				}
 				// Push out another update, to sync that commit
@@ -526,7 +555,7 @@ func (s *Server) leaderSelect() {
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.State.Set(Follower)
+				s.state.Set(Follower)
 				return
 			}
 
@@ -535,7 +564,7 @@ func (s *Server) leaderSelect() {
 			s.logRequestVoteResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.State.Set(Follower)
+				s.state.Set(Follower)
 				return
 			}
 		}
@@ -546,18 +575,18 @@ func (s *Server) handleRequestVote(r RequestVote) (RequestVoteResponse, bool) {
 	// Spec is ambiguous here; basing this (loosely!) on benbjohnson's impl
 
 	// If the request is from an old term, reject
-	if r.Term < s.Term {
+	if r.Term < s.term {
 		return RequestVoteResponse{
-			Term:        s.Term,
+			Term:        s.term,
 			VoteGranted: false,
-			reason:      fmt.Sprintf("Term %d < %d", r.Term, s.Term),
+			reason:      fmt.Sprintf("Term %d < %d", r.Term, s.term),
 		}, false
 	}
 
 	// If the request is from a newer term, reset our state
 	stepDown := false
-	if r.Term > s.Term {
-		s.Term = r.Term
+	if r.Term > s.term {
+		s.term = r.Term
 		s.vote = 0
 		stepDown = true
 	}
@@ -565,21 +594,21 @@ func (s *Server) handleRequestVote(r RequestVote) (RequestVoteResponse, bool) {
 	// If we've already voted for someone else this term, reject
 	if s.vote != 0 && s.vote != r.CandidateId {
 		return RequestVoteResponse{
-			Term:        s.Term,
+			Term:        s.term,
 			VoteGranted: false,
 			reason:      fmt.Sprintf("already cast vote for %d", s.vote),
 		}, stepDown
 	}
 
 	// If the candidate log isn't at least as recent as ours, reject
-	if s.Log.LastIndex() > r.LastLogIndex || s.Log.LastTerm() > r.LastLogTerm {
+	if s.log.LastIndex() > r.LastLogIndex || s.log.LastTerm() > r.LastLogTerm {
 		return RequestVoteResponse{
-			Term:        s.Term,
+			Term:        s.term,
 			VoteGranted: false,
 			reason: fmt.Sprintf(
 				"our index/term %d/%d > %d/%d",
-				s.Log.LastIndex(),
-				s.Log.LastTerm(),
+				s.log.LastIndex(),
+				s.log.LastTerm(),
 				r.LastLogIndex,
 				r.LastLogTerm,
 			),
@@ -590,7 +619,7 @@ func (s *Server) handleRequestVote(r RequestVote) (RequestVoteResponse, bool) {
 	s.vote = r.CandidateId
 	s.resetElectionTimeout() // TODO why?
 	return RequestVoteResponse{
-		Term:        s.Term,
+		Term:        s.term,
 		VoteGranted: true,
 	}, stepDown
 }
@@ -603,18 +632,18 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	// too many protocol rules) in one code path.
 
 	// If the request is from an old term, reject
-	if r.Term < s.Term {
+	if r.Term < s.term {
 		return AppendEntriesResponse{
-			Term:    s.Term,
+			Term:    s.term,
 			Success: false,
-			reason:  fmt.Sprintf("Term %d < %d", r.Term, s.Term),
+			reason:  fmt.Sprintf("Term %d < %d", r.Term, s.term),
 		}, false
 	}
 
 	// If the request is from a newer term, reset our state
 	stepDown := false
-	if r.Term > s.Term {
-		s.Term = r.Term
+	if r.Term > s.term {
+		s.term = r.Term
 		s.vote = 0
 		stepDown = true
 	}
@@ -623,18 +652,18 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	s.resetElectionTimeout()
 
 	// // Special case
-	// if len(r.Entries) == 0 && r.CommitIndex == s.Log.CommitIndex() {
+	// if len(r.Entries) == 0 && r.CommitIndex == s.log.CommitIndex() {
 	// 	return AppendEntriesResponse{
-	// 		Term:    s.Term,
+	// 		Term:    s.term,
 	// 		Success: true,
 	// 		reason:  "nothing to do",
 	// 	}, stepDown
 	// }
 
 	// Reject if log doesn't contain a matching previous entry
-	if err := s.Log.EnsureLastIs(r.PrevLogIndex, r.PrevLogTerm); err != nil {
+	if err := s.log.EnsureLastIs(r.PrevLogIndex, r.PrevLogTerm); err != nil {
 		return AppendEntriesResponse{
-			Term:    s.Term,
+			Term:    s.term,
 			Success: false,
 			reason: fmt.Sprintf(
 				"while ensuring last log entry had index=%d term=%d: error: %s",
@@ -647,9 +676,9 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// Append entries to the log
 	for i, entry := range r.Entries {
-		if err := s.Log.AppendEntry(entry); err != nil {
+		if err := s.log.AppendEntry(entry); err != nil {
 			return AppendEntriesResponse{
-				Term:    s.Term,
+				Term:    s.term,
 				Success: false,
 				reason: fmt.Sprintf(
 					"AppendEntry %d/%d failed: %s",
@@ -663,9 +692,9 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// Commit up to the commit index
 	if r.CommitIndex > 0 { // TODO perform this check, or let it fail?
-		if err := s.Log.CommitTo(r.CommitIndex); err != nil {
+		if err := s.log.CommitTo(r.CommitIndex); err != nil {
 			return AppendEntriesResponse{
-				Term:    s.Term,
+				Term:    s.term,
 				Success: false,
 				reason:  fmt.Sprintf("CommitTo(%d) failed: %s", r.CommitIndex, err),
 			}, stepDown
@@ -674,7 +703,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// all good
 	return AppendEntriesResponse{
-		Term:    s.Term,
+		Term:    s.term,
 		Success: true,
 	}, stepDown
 }

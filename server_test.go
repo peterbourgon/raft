@@ -35,7 +35,7 @@ func TestFollowerToCandidate(t *testing.T) {
 		2: nonresponsivePeer(2),
 		3: nonresponsivePeer(3),
 	})
-	if server.State.Get() != raft.Follower {
+	if server.State() != raft.Follower {
 		t.Fatalf("didn't start as Follower")
 	}
 
@@ -47,7 +47,7 @@ func TestFollowerToCandidate(t *testing.T) {
 		if time.Now().After(cutoff) {
 			t.Fatal("failed to become Candidate")
 		}
-		if state := server.State.Get(); state != raft.Candidate {
+		if state := server.State(); state != raft.Candidate {
 			t.Logf("after %15s, %s; retry", time.Since(began), state)
 			time.Sleep(backoff)
 			backoff *= 2
@@ -60,7 +60,7 @@ func TestFollowerToCandidate(t *testing.T) {
 	d := 2 * raft.ElectionTimeout()
 	time.Sleep(d)
 
-	if server.State.Get() != raft.Candidate {
+	if server.State() != raft.Candidate {
 		t.Fatalf("after %s, not Candidate", d.String())
 	}
 }
@@ -98,7 +98,7 @@ func TestCandidateToLeader(t *testing.T) {
 		if time.Now().After(cutoff) {
 			t.Fatal("failed to become Leader")
 		}
-		if state := server.State.Get(); state != raft.Leader {
+		if state := server.State(); state != raft.Leader {
 			t.Logf("after %15s, %s; retry", time.Since(began), state)
 			time.Sleep(backoff)
 			backoff *= 2
@@ -135,7 +135,7 @@ func TestFailedElection(t *testing.T) {
 	server.Start()
 
 	time.Sleep(2 * raft.ElectionTimeout())
-	if server.State.Get() == raft.Leader {
+	if server.State() == raft.Leader {
 		t.Fatalf("erroneously became Leader")
 	}
 	t.Logf("failed to become Leader in non-responsive cluster (good)")
