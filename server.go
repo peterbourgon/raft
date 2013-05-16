@@ -16,14 +16,20 @@ const (
 	Leader    = "Leader"
 )
 
+const (
+	unknownLeader = 0
+)
+
 var (
 	MinimumElectionTimeoutMs = 250
 )
 
 var (
 	ErrNotLeader             = errors.New("not the leader")
+	ErrUnknownLeader         = errors.New("unknown leader")
 	ErrDeposed               = errors.New("deposed during replication")
 	ErrAppendEntriesRejected = errors.New("AppendEntries RPC rejected")
+	ErrReplicationFailed     = errors.New("command replication failed (but will keep retrying)")
 )
 
 // ElectionTimeout returns a variable time.Duration, between
@@ -60,12 +66,32 @@ func (s *serverState) Set(value string) {
 	s.value = value
 }
 
+// serverRunning is just a bool protected by a mutex.
+type serverRunning struct {
+	sync.RWMutex
+	value bool
+}
+
+func (s *serverRunning) Get() bool {
+	s.RLock()
+	defer s.RUnlock()
+	return s.value
+}
+
+func (s *serverRunning) Set(value bool) {
+	s.Lock()
+	defer s.Unlock()
+	s.value = value
+}
+
 // Server is the agent that performs all of the Raft protocol logic.
 // In a typical application, each running process that wants to be part of
 // the distributed state machine will contain a server component.
 type Server struct {
 	Id                uint64 // id of this server (do not modify)
 	state             *serverState
+	running           *serverRunning
+	leader            uint64 // who we believe is the leader
 	term              uint64 // "current term number, which increases monotonically"
 	vote              uint64 // who we voted for this term, if applicable
 	log               *Log
@@ -73,7 +99,9 @@ type Server struct {
 	appendEntriesChan chan appendEntriesTuple
 	requestVoteChan   chan requestVoteTuple
 	commandChan       chan commandTuple
+	responsesChan     chan []byte
 	electionTick      <-chan time.Time
+	quit              chan chan struct{}
 }
 
 // NewServer returns an initialized, un-started server.
@@ -89,13 +117,17 @@ func NewServer(id uint64, store io.Writer, apply func([]byte) ([]byte, error)) *
 	s := &Server{
 		Id:                id,
 		state:             &serverState{value: Follower}, // "when servers start up they begin as followers"
-		term:              1,                             // TODO is this correct?
+		running:           &serverRunning{value: false},
+		leader:            unknownLeader, // unknown at startup
+		term:              1,             // TODO is this correct?
 		log:               NewLog(store, apply),
 		peers:             nil,
 		appendEntriesChan: make(chan appendEntriesTuple),
 		requestVoteChan:   make(chan requestVoteTuple),
 		commandChan:       make(chan commandTuple),
+		responsesChan:     make(chan []byte),
 		electionTick:      time.NewTimer(ElectionTimeout()).C, // one-shot
+		quit:              make(chan chan struct{}),
 	}
 	return s
 }
@@ -117,32 +149,40 @@ func (s *Server) Start() {
 	go s.loop()
 }
 
-type commandTuple struct {
-	Command  []byte
-	Response chan []byte
-	Err      chan error
+// Stop terminates the server. Stopped servers should not be restarted.
+func (s *Server) Stop() {
+	q := make(chan struct{})
+	s.quit <- q
+	<-q
 }
 
-// Command pushes a state-machine command through the Raft network.
-// Once Raft has decided it's been safely replicated, the command is applied
-// (via the apply function, passed at Server instantiation) and this function
-// returns.
+type commandTuple struct {
+	Command []byte
+	Err     chan error
+}
+
+// Command appends the passed command to the leader log. If error is nil, the
+// command will eventually get replicated throughout the Raft network. When the
+// command gets committed to the local server log, it's passed to the apply
+// function, and the response from that function is provided on the
+// CommandResponses channel.
 //
-// Note that per Raft semantics, this method may block for some time, and can
-// appear to fail (via a timeout) if we don't reach a quorum. But once the
-// command is registered with the leader, Raft will try to replicate it to all
-// servers, and won't give up until it succeeds. So, while Raft does guarantee
-// command order from the perspective of the leader, the safest bet is to
-// structure your commands so that they're idempotent.
-func (s *Server) Command(cmd []byte) ([]byte, error) {
-	t := commandTuple{cmd, make(chan []byte), make(chan error)}
-	s.commandChan <- t
-	select {
-	case resp := <-t.Response:
-		return resp, nil
-	case err := <-t.Err:
-		return []byte{}, err
-	}
+// This is a public method only to facilitate the construction of peers
+// on arbitrary transports.
+func (s *Server) Command(cmd []byte) error {
+	err := make(chan error)
+	s.commandChan <- commandTuple{cmd, err}
+	return <-err
+}
+
+// CommandResponses yields a channel that contains ordered responses to every
+// command issued via Command. Clients are obliged to consume every response
+// from this channel in a timely manner.
+//
+// This is a public method only to facilitate the construction of peers
+// on arbitrary transports.
+func (s *Server) CommandResponses() <-chan []byte {
+	return s.responsesChan
 }
 
 // AppendEntries processes the given RPC and returns the response.
@@ -190,7 +230,8 @@ func (s *Server) RequestVote(rv RequestVote) RequestVoteResponse {
 //
 
 func (s *Server) loop() {
-	for {
+	s.running.Set(true)
+	for s.running.Get() {
 		switch state := s.State(); state {
 		case Follower:
 			s.followerSelect()
@@ -235,12 +276,34 @@ func (s *Server) logRequestVoteResponse(req RequestVote, resp RequestVoteRespons
 	)
 }
 
+func (s *Server) forwardCommand(t commandTuple) {
+	switch s.leader {
+	case unknownLeader:
+		t.Err <- ErrUnknownLeader
+		return
+
+	case s.Id: // I am the leader
+		panic("impossible state in forwardCommand")
+
+	default:
+		leader, ok := s.peers[s.leader]
+		if !ok {
+			panic("invalid state in peers")
+		}
+		t.Err <- leader.Command(t.Command)
+	}
+}
+
 func (s *Server) followerSelect() {
 	for {
 		select {
-		case commandTuple := <-s.commandChan:
-			commandTuple.Err <- ErrNotLeader // TODO forward instead
-			continue
+		case q := <-s.quit:
+			s.running.Set(false)
+			close(q)
+			return
+
+		case t := <-s.commandChan:
+			s.forwardCommand(t)
 
 		case <-s.electionTick:
 			// 5.2 Leader election: "A follower increments its current term and
@@ -248,10 +311,19 @@ func (s *Server) followerSelect() {
 			s.logGeneric("election timeout, becoming candidate")
 			s.term++
 			s.state.Set(Candidate)
+			s.leader = unknownLeader
 			s.resetElectionTimeout()
 			return
 
 		case t := <-s.appendEntriesChan:
+			if s.leader == unknownLeader {
+				s.leader = t.Request.LeaderId
+				s.logGeneric("discovered Leader %d", s.leader)
+			}
+			if s.leader != t.Request.LeaderId {
+				s.logGeneric("our leader (%d) conflicts with AppendEntries (%d)", s.leader, t.Request.LeaderId)
+				panic("inconsistent leader state in network")
+			}
 			resp, stepDown := s.handleAppendEntries(t.Request)
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
@@ -269,7 +341,7 @@ func (s *Server) candidateSelect() {
 	// parallel to each of the other servers in the cluster. If the candidate
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
-
+	s.leader = unknownLeader
 	responses, canceler := s.peers.Except(s.Id).RequestVotes(RequestVote{
 		Term:         s.term,
 		CandidateId:  s.Id,
@@ -293,9 +365,13 @@ func (s *Server) candidateSelect() {
 	// leader, or (c) a period of time goes by with no winner."
 	for {
 		select {
-		case commandTuple := <-s.commandChan:
-			commandTuple.Err <- ErrNotLeader // TODO forward instead
-			continue
+		case q := <-s.quit:
+			s.running.Set(false)
+			close(q)
+			return
+
+		case t := <-s.commandChan:
+			s.forwardCommand(t)
 
 		case r := <-responses:
 			s.logGeneric("got vote: term=%d granted=%v", r.Term, r.VoteGranted)
@@ -310,8 +386,9 @@ func (s *Server) candidateSelect() {
 			}
 			// "Once a candidate wins an election, it becomes leader."
 			if votesReceived >= votesRequired {
-				s.logGeneric("%d >= %d: win", votesReceived, votesRequired)
+				s.leader = s.Id
 				s.state.Set(Leader)
+				s.logGeneric("%d >= %d: win", votesReceived, votesRequired)
 				return // win
 			}
 
@@ -326,8 +403,9 @@ func (s *Server) candidateSelect() {
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("stepping down to Follower")
+				s.leader = t.Request.LeaderId
 				s.state.Set(Follower)
+				s.logGeneric("stepping down to Follower (leader=%s)", s.leader)
 				return // lose
 			}
 
@@ -337,8 +415,9 @@ func (s *Server) candidateSelect() {
 			s.logRequestVoteResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("stepping down to Follower")
+				s.leader = unknownLeader
 				s.state.Set(Follower)
+				s.logGeneric("stepping down to Follower (leader unknown)")
 				return // lose
 			}
 
@@ -432,6 +511,8 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 }
 
 func (s *Server) leaderSelect() {
+	s.leader = s.Id
+
 	// 5.3 Log replication: "The leader maintains a nextIndex for each follower,
 	// which is the index of the next log entry the leader will send to that
 	// follower. When a leader first comes to power it initializes all nextIndex
@@ -441,16 +522,21 @@ func (s *Server) leaderSelect() {
 	heartbeatTick := time.Tick(BroadcastInterval())
 	for {
 		select {
-		case commandTuple := <-s.commandChan:
+		case q := <-s.quit:
+			s.running.Set(false)
+			close(q)
+			return
+
+		case t := <-s.commandChan:
 			// Append the command to our (leader) log
 			currentTerm := s.term
 			entry := LogEntry{
 				Index:   s.log.LastIndex() + 1,
 				Term:    currentTerm,
-				Command: commandTuple.Command,
+				Command: t.Command,
 			}
 			if err := s.log.AppendEntry(entry); err != nil {
-				commandTuple.Err <- err
+				t.Err <- err
 				continue
 			}
 
@@ -460,8 +546,9 @@ func (s *Server) leaderSelect() {
 			timeout := time.After(ElectionTimeout())
 
 			// Scatter flush requests to all peers
-			responses := make(chan error, len(s.peers))
-			for _, peer := range s.peers.Except(s.Id) {
+			recipients := s.peers.Except(s.Id)
+			responses := make(chan error, len(recipients))
+			for _, peer := range recipients {
 				go func(peer0 Peer) {
 					err := s.flush(peer0, ni)
 					if err != nil {
@@ -473,10 +560,13 @@ func (s *Server) leaderSelect() {
 
 			// Gather responses and signal a deposition or successful commit
 			committed := make(chan struct{})
+			failed := make(chan struct{})
 			deposed := make(chan struct{})
 			go func() {
 				have, required := 1, s.peers.Quorum()
-				for err := range responses {
+				for i := 0; i < len(recipients); i++ {
+					err := <-responses
+					s.logGeneric("got a response; err=%v", err)
 					if err == ErrDeposed {
 						close(deposed)
 						return
@@ -489,26 +579,36 @@ func (s *Server) leaderSelect() {
 						return
 					}
 				}
+				close(failed)
 			}()
 
-			// Return a response
+			// resolve
 			select {
-			case <-deposed:
-				commandTuple.Err <- ErrDeposed
-				return
-			case <-timeout:
-				commandTuple.Err <- ErrTimeout
-				continue
 			case <-committed:
-				// Commit our local log
-				if err := s.log.CommitTo(entry.Index); err != nil {
+				s.logGeneric("replication of command succeeded; committing")
+				if err := s.log.CommitTo(entry.Index, s.responsesChan); err != nil {
 					panic(err)
 				}
-				// Push out another update, to sync that commit
 				for _, peer := range s.peers.Except(s.Id) {
 					s.flush(peer, ni) // TODO should this be parallelized?
 				}
-				commandTuple.Response <- []byte{} // TODO actual response
+				t.Err <- nil
+				continue
+
+			case <-failed:
+				s.logGeneric("replication of command failed")
+				t.Err <- ErrReplicationFailed
+				continue
+
+			case <-deposed:
+				t.Err <- ErrDeposed
+				s.state.Set(Follower)
+				s.leader = unknownLeader
+				s.logGeneric("during Command, deposed to Follower (leader unknown)")
+				return
+
+			case <-timeout:
+				t.Err <- ErrTimeout
 				continue
 			}
 
@@ -539,7 +639,9 @@ func (s *Server) leaderSelect() {
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
+				s.leader = t.Request.LeaderId
 				s.state.Set(Follower)
+				s.logGeneric("after an AppendEntries, deposed to Follower (leader=%d)", s.leader)
 				return
 			}
 
@@ -548,35 +650,37 @@ func (s *Server) leaderSelect() {
 			s.logRequestVoteResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
+				s.leader = unknownLeader
 				s.state.Set(Follower)
+				s.logGeneric("after a RequestVote, deposed to Follower (leader unknown)")
 				return
 			}
 		}
 	}
 }
 
-func (s *Server) handleRequestVote(r RequestVote) (RequestVoteResponse, bool) {
+func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	// Spec is ambiguous here; basing this (loosely!) on benbjohnson's impl
 
 	// If the request is from an old term, reject
-	if r.Term < s.term {
+	if rv.Term < s.term {
 		return RequestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
-			reason:      fmt.Sprintf("Term %d < %d", r.Term, s.term),
+			reason:      fmt.Sprintf("Term %d < %d", rv.Term, s.term),
 		}, false
 	}
 
 	// If the request is from a newer term, reset our state
 	stepDown := false
-	if r.Term > s.term {
-		s.term = r.Term
+	if rv.Term > s.term {
+		s.term = rv.Term
 		s.vote = 0
 		stepDown = true
 	}
 
 	// If we've already voted for someone else this term, reject
-	if s.vote != 0 && s.vote != r.CandidateId {
+	if s.vote != 0 && s.vote != rv.CandidateId {
 		return RequestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
@@ -585,7 +689,7 @@ func (s *Server) handleRequestVote(r RequestVote) (RequestVoteResponse, bool) {
 	}
 
 	// If the candidate log isn't at least as recent as ours, reject
-	if s.log.LastIndex() > r.LastLogIndex || s.log.LastTerm() > r.LastLogTerm {
+	if s.log.LastIndex() > rv.LastLogIndex || s.log.LastTerm() > rv.LastLogTerm {
 		return RequestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
@@ -593,14 +697,14 @@ func (s *Server) handleRequestVote(r RequestVote) (RequestVoteResponse, bool) {
 				"our index/term %d/%d > %d/%d",
 				s.log.LastIndex(),
 				s.log.LastTerm(),
-				r.LastLogIndex,
-				r.LastLogTerm,
+				rv.LastLogIndex,
+				rv.LastLogTerm,
 			),
 		}, stepDown
 	}
 
 	// We passed all the tests: cast vote in favor
-	s.vote = r.CandidateId
+	s.vote = rv.CandidateId
 	s.resetElectionTimeout() // TODO why?
 	return RequestVoteResponse{
 		Term:        s.term,
@@ -635,15 +739,6 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	// In any case, reset our election timeout
 	s.resetElectionTimeout()
 
-	// // Special case
-	// if len(r.Entries) == 0 && r.CommitIndex == s.log.CommitIndex() {
-	// 	return AppendEntriesResponse{
-	// 		Term:    s.term,
-	// 		Success: true,
-	// 		reason:  "nothing to do",
-	// 	}, stepDown
-	// }
-
 	// Reject if log doesn't contain a matching previous entry
 	if err := s.log.EnsureLastIs(r.PrevLogIndex, r.PrevLogTerm); err != nil {
 		return AppendEntriesResponse{
@@ -676,7 +771,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// Commit up to the commit index
 	if r.CommitIndex > 0 { // TODO perform this check, or let it fail?
-		if err := s.log.CommitTo(r.CommitIndex); err != nil {
+		if err := s.log.CommitTo(r.CommitIndex, s.responsesChan); err != nil {
 			return AppendEntriesResponse{
 				Term:    s.term,
 				Success: false,

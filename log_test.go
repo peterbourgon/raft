@@ -118,6 +118,7 @@ func TestLogEntryEncodeDecode(t *testing.T) {
 
 func TestLogAppend(t *testing.T) {
 	c := []byte(`{}`)
+	rc := make(chan []byte, 100)
 	buf := &bytes.Buffer{}
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	log := raft.NewLog(buf, noop)
@@ -148,7 +149,7 @@ func TestLogAppend(t *testing.T) {
 	}
 
 	// Commit the first two, only
-	if err := log.CommitTo(2); err != nil {
+	if err := log.CommitTo(2, rc); err != nil {
 		t.Errorf("CommitTo: %s", err)
 	}
 
@@ -162,15 +163,15 @@ func TestLogAppend(t *testing.T) {
 	}
 
 	// Make some invalid commits
-	if err := log.CommitTo(1); err != raft.ErrIndexTooSmall {
+	if err := log.CommitTo(1, rc); err != raft.ErrIndexTooSmall {
 		t.Errorf("Commit: expected ErrIndexTooSmall, got %v", err)
 	}
-	if err := log.CommitTo(4); err != raft.ErrIndexTooBig {
+	if err := log.CommitTo(4, rc); err != raft.ErrIndexTooBig {
 		t.Errorf("Commit: expected ErrIndexTooBig, got %v", err)
 	}
 
 	// Commit every LogEntry
-	if err := log.CommitTo(3); err != nil {
+	if err := log.CommitTo(3, rc); err != nil {
 		t.Errorf("CommitTo: %s", err)
 	}
 
@@ -231,6 +232,7 @@ func TestLogContains(t *testing.T) {
 
 func TestLogTruncation(t *testing.T) {
 	c := []byte(`{}`)
+	rc := make(chan []byte, 100)
 	buf := &bytes.Buffer{}
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	log := raft.NewLog(buf, noop)
@@ -249,7 +251,7 @@ func TestLogTruncation(t *testing.T) {
 		}
 	}
 
-	if err := log.CommitTo(2); err != nil {
+	if err := log.CommitTo(2, rc); err != nil {
 		t.Fatal(err)
 	}
 

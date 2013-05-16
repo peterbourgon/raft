@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"io"
 	"sync"
+	"time"
 )
 
 var (
@@ -172,13 +173,13 @@ func (l *Log) appendEntry(entry LogEntry) error {
 // CommitTo commits all log entries up to the passed commitIndex. Commit means:
 // synchronize the log entry to persistent storage, and call the state machine
 // execute function for the log entry's command.
-func (l *Log) CommitTo(commitIndex uint64) error {
+func (l *Log) CommitTo(commitIndex uint64, responses chan<- []byte) error {
 	l.Lock()
 	defer l.Unlock()
-	return l.commitTo(commitIndex)
+	return l.commitTo(commitIndex, responses)
 }
 
-func (l *Log) commitTo(commitIndex uint64) error {
+func (l *Log) commitTo(commitIndex uint64, responses chan<- []byte) error {
 	// Reject old commit indexes
 	if commitIndex < l.commitIndex {
 		return ErrIndexTooSmall
@@ -195,8 +196,15 @@ func (l *Log) commitTo(commitIndex uint64) error {
 		if err := entry.Encode(l.store); err != nil {
 			return err
 		}
-		if _, err := l.apply(entry.Command); err != nil {
+		resp, err := l.apply(entry.Command)
+		if err != nil {
 			return err
+		}
+		select {
+		case responses <- resp: // TODO might be safe to `go` this
+			break
+		case <-time.After(BroadcastInterval()): // << ElectionInterval
+			panic("uncoöperative command response receiver")
 		}
 		l.commitIndex = entry.Index
 	}
