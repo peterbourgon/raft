@@ -154,6 +154,7 @@ func (s *Server) Stop() {
 	q := make(chan struct{})
 	s.quit <- q
 	<-q
+	s.logGeneric("server stopped")
 }
 
 type commandTuple struct {
@@ -279,8 +280,8 @@ func (s *Server) logRequestVoteResponse(req RequestVote, resp RequestVoteRespons
 func (s *Server) forwardCommand(t commandTuple) {
 	switch s.leader {
 	case unknownLeader:
+		s.logGeneric("got command, but don't know leader")
 		t.Err <- ErrUnknownLeader
-		return
 
 	case s.Id: // I am the leader
 		panic("impossible state in forwardCommand")
@@ -290,7 +291,11 @@ func (s *Server) forwardCommand(t commandTuple) {
 		if !ok {
 			panic("invalid state in peers")
 		}
-		t.Err <- leader.Command(t.Command)
+		s.logGeneric("got command, forwarding to %d", s.leader)
+		// We're blocking our {follower,candidate}Select function in the
+		// receive-command branch. If we continue to block while forwarding
+		// the command, the leader won't be able to get a response from us!
+		go func() { t.Err <- leader.Command(t.Command) }()
 	}
 }
 
@@ -299,6 +304,7 @@ func (s *Server) followerSelect() {
 		select {
 		case q := <-s.quit:
 			s.running.Set(false)
+			close(s.responsesChan)
 			close(q)
 			return
 
@@ -349,6 +355,7 @@ func (s *Server) candidateSelect() {
 		LastLogTerm:  s.log.LastTerm(),
 	})
 	defer canceler.Cancel()
+	s.vote = s.Id      // vote for myself
 	votesReceived := 1 // already have a vote from myself
 	votesRequired := s.peers.Quorum()
 	s.logGeneric("election started, %d vote(s) required", votesRequired)
@@ -367,6 +374,7 @@ func (s *Server) candidateSelect() {
 		select {
 		case q := <-s.quit:
 			s.running.Set(false)
+			close(s.responsesChan)
 			close(q)
 			return
 
@@ -377,18 +385,26 @@ func (s *Server) candidateSelect() {
 			s.logGeneric("got vote: term=%d granted=%v", r.Term, r.VoteGranted)
 			// "A candidate wins the election if it receives votes from a
 			// majority of servers in the full cluster for the same term."
-			if r.Term != s.term {
-				// TODO what if r.Term > s.term? do we lose the election?
-				continue
+			if r.Term > s.term {
+				s.logGeneric("got future term (%d>%d); abandoning election", r.Term, s.term)
+				s.leader = unknownLeader
+				s.state.Set(Follower)
+				s.vote = 0
+				return // lose
+			}
+			if r.Term < s.term {
+				s.logGeneric("got vote from past term (%d<%d); ignoring", r.Term, s.term)
+				break
 			}
 			if r.VoteGranted {
 				votesReceived++
 			}
 			// "Once a candidate wins an election, it becomes leader."
 			if votesReceived >= votesRequired {
+				s.logGeneric("%d >= %d: win", votesReceived, votesRequired)
 				s.leader = s.Id
 				s.state.Set(Leader)
-				s.logGeneric("%d >= %d: win", votesReceived, votesRequired)
+				s.vote = 0
 				return // win
 			}
 
@@ -403,9 +419,10 @@ func (s *Server) candidateSelect() {
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
+				s.logGeneric("stepping down to Follower (leader=%s)", s.leader)
 				s.leader = t.Request.LeaderId
 				s.state.Set(Follower)
-				s.logGeneric("stepping down to Follower (leader=%s)", s.leader)
+				s.vote = 0
 				return // lose
 			}
 
@@ -415,15 +432,24 @@ func (s *Server) candidateSelect() {
 			s.logRequestVoteResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
+				s.logGeneric("stepping down to Follower (leader unknown)")
 				s.leader = unknownLeader
 				s.state.Set(Follower)
-				s.logGeneric("stepping down to Follower (leader unknown)")
+				s.vote = 0
 				return // lose
 			}
 
 		case <-s.electionTick: //  "a period of time goes by with no winner"
-			s.logGeneric("election ended with no winner")
+			// "The third possible outcome is that a candidate neither wins nor
+			// loses the election: if many followers become candidates at the
+			// same time, votes could be split so that no candidate obtains a
+			// majority. When this happens, each candidate will start a new
+			// election by incrementing its term and initiating another round of
+			// RequestVote RPCs."
+			s.logGeneric("election ended with no winner; incrementing term and trying again")
 			s.resetElectionTimeout()
+			s.term++
+			s.vote = 0
 			return // draw
 		}
 	}
@@ -501,7 +527,7 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	}
 	if !resp.Success {
 		ni.Decrement(peerId)
-		return ErrAppendEntriesRejected
+		return fmt.Errorf("%d rejected AppendEntries RPC", peer.Id()) // TODO ErrAppendEntriesRejected
 	}
 
 	if len(entries) > 0 {
@@ -517,13 +543,20 @@ func (s *Server) leaderSelect() {
 	// which is the index of the next log entry the leader will send to that
 	// follower. When a leader first comes to power it initializes all nextIndex
 	// values to the index just after the last one in its log."
-	ni := newNextIndex(s.peers, s.log.LastIndex()+1)
+	//
+	// I changed this from LastIndex+1 to simply LastIndex. Every initial
+	// communication from leader to follower was being rejected and we were
+	// doing the decrement. This was just annoying, except if you manage to
+	// sneak in a command before the first heartbeat. Then, it will never get
+	// properly replicated (it seems).
+	ni := newNextIndex(s.peers, s.log.LastIndex()) // +1)
 
 	heartbeatTick := time.Tick(BroadcastInterval())
 	for {
 		select {
 		case q := <-s.quit:
 			s.running.Set(false)
+			close(s.responsesChan)
 			close(q)
 			return
 
@@ -559,14 +592,14 @@ func (s *Server) leaderSelect() {
 			}
 
 			// Gather responses and signal a deposition or successful commit
-			committed := make(chan struct{})
-			failed := make(chan struct{})
+			commit := make(chan struct{})
+			fail := make(chan struct{})
 			deposed := make(chan struct{})
 			go func() {
 				have, required := 1, s.peers.Quorum()
+				// a 1-node cluster has have == required, len(recipients) == 0
 				for i := 0; i < len(recipients); i++ {
 					err := <-responses
-					s.logGeneric("got a response; err=%v", err)
 					if err == ErrDeposed {
 						close(deposed)
 						return
@@ -574,17 +607,20 @@ func (s *Server) leaderSelect() {
 					if err == nil {
 						have++
 					}
-					if have > required {
-						close(committed)
-						return
+					if have >= required {
+						break
 					}
 				}
-				close(failed)
+				if have >= required {
+					close(commit)
+					return
+				}
+				close(fail)
 			}()
 
 			// resolve
 			select {
-			case <-committed:
+			case <-commit:
 				s.logGeneric("replication of command succeeded; committing")
 				if err := s.log.CommitTo(entry.Index, s.responsesChan); err != nil {
 					panic(err)
@@ -595,7 +631,7 @@ func (s *Server) leaderSelect() {
 				t.Err <- nil
 				continue
 
-			case <-failed:
+			case <-fail:
 				s.logGeneric("replication of command failed")
 				t.Err <- ErrReplicationFailed
 				continue
@@ -608,6 +644,7 @@ func (s *Server) leaderSelect() {
 				return
 
 			case <-timeout:
+				s.logGeneric("replication of command timed out")
 				t.Err <- ErrTimeout
 				continue
 			}
@@ -731,6 +768,17 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	// If the request is from a newer term, reset our state
 	stepDown := false
 	if r.Term > s.term {
+		s.term = r.Term
+		s.vote = 0
+		stepDown = true
+	}
+
+	// Special case for candidates: "While waiting for votes, a candidate may
+	// receive an AppendEntries RPC from another server claiming to be leader.
+	// If the leader’s term (included in its RPC) is at least as large as the
+	// candidate’s current term, then the candidate recognizes the leader as
+	// legitimate and steps down, meaning that it returns to follower state."
+	if s.State() == Candidate && r.LeaderId != s.leader && r.Term >= s.term {
 		s.term = r.Term
 		s.vote = 0
 		stepDown = true

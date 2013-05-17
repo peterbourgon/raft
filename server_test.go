@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/peterbourgon/raft"
 	"log"
+	"math/rand"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,7 @@ import (
 )
 
 func init() {
+	rand.Seed(time.Now().UnixNano())
 	log.SetFlags(log.Lmicroseconds)
 }
 
@@ -200,6 +202,120 @@ func TestSimpleConsensus(t *testing.T) {
 	t.Logf("s1 responses: %s", s1Responses.String())
 	t.Logf("s2 responses: %s", s2Responses.String())
 	t.Logf("s3 responses: %s", s3Responses.String())
+}
+
+func TestOrdering(t *testing.T) {
+	log.SetOutput(&bytes.Buffer{})
+	defer log.SetOutput(os.Stdout)
+
+	values := rand.Perm(8 + rand.Intn(16))
+	for nServers := 1; nServers <= 6; nServers++ {
+		t.Logf("nServers=%d", nServers)
+		done := make(chan struct{})
+		go func() {
+			testOrder(t, nServers, values...)
+			close(done)
+		}()
+		select {
+		case <-done:
+			break
+		case <-time.After(5 * time.Second):
+			t.Fatalf("nServers=%d values=%v timeout (infinite loop?)", nServers, values)
+		}
+	}
+}
+
+func testOrder(t *testing.T, nServers int, values ...int) {
+	// command and response
+	type send struct {
+		Send int `json:"send"`
+	}
+	type recv struct {
+		Recv int `json:"recv"`
+	}
+	do := func(buf []byte) ([]byte, error) {
+		var s send
+		json.Unmarshal(buf, &s)
+		return json.Marshal(recv{Recv: s.Send})
+	}
+
+	// set up the cluster
+	servers := []*raft.Server{}
+	buffers := []*bytes.Buffer{}
+	for i := 0; i < nServers; i++ {
+		buffers = append(buffers, &bytes.Buffer{})
+		servers = append(servers, raft.NewServer(uint64(i+1), buffers[i], do))
+	}
+	peers := raft.Peers{}
+	for _, server := range servers {
+		peers[server.Id] = raft.NewLocalPeer(server)
+	}
+	for _, server := range servers {
+		server.SetPeers(peers)
+	}
+
+	// record command responses somewhere
+	//began := time.Now()
+	responses := make([]synchronizedBuffer, len(servers))
+	for i, server := range servers {
+		go func(server0 *raft.Server, i0 int) {
+			for buf := range server0.CommandResponses() {
+				//t.Logf("+%-15s %d: recv: %s", time.Since(began), server0.Id, buf)
+				var r recv
+				json.Unmarshal(buf, &r)
+				responses[i0].Write(append([]byte(fmt.Sprint(r.Recv)), ' '))
+			}
+		}(server, i)
+	}
+
+	// define cmds
+	cmds := []send{}
+	for _, v := range values {
+		cmds = append(cmds, send{v})
+	}
+
+	// function-scope this so servers get stopped deterministically
+	func() {
+		// boot up the cluster
+		for _, server := range servers {
+			server.Start()
+			defer server.Stop()
+		}
+
+		// send commands
+		for i, cmd := range cmds {
+			id := uint64(rand.Intn(nServers)) + 1
+			peer := peers[id]
+			buf, _ := json.Marshal(cmd)
+		retry:
+			for {
+				//t.Logf("+%-15s %d: send: %s", time.Since(began), id, buf)
+				switch err := peer.Command(buf); err {
+				case nil:
+					//t.Logf("+%-15s %d: send OK: %s", time.Since(began), id, buf)
+					break retry
+				case raft.ErrUnknownLeader:
+					//t.Logf("+%-15s %d: send failed, no leader, will retry", time.Since(began), id)
+					time.Sleep(raft.ElectionTimeout())
+				default:
+					t.Fatalf("i=%d peer=%d send failed: %s", i, id, err)
+				}
+			}
+		}
+	}()
+
+	// check the command responses
+	expected := []byte{}
+	for _, cmd := range cmds {
+		expected = append(expected, append([]byte(fmt.Sprint(cmd.Send)), ' ')...)
+	}
+	for i := 0; i < len(servers); i++ {
+		got := responses[i].String()
+		t.Logf("%d: %v", i, got)
+		if string(expected) != got {
+			t.Errorf("%d: %s != %s", i, string(expected), got)
+		}
+	}
 }
 
 //
