@@ -22,6 +22,7 @@ const (
 
 var (
 	MinimumElectionTimeoutMs = 250
+	MaximumElectionTimeoutMs = 2 * MinimumElectionTimeoutMs
 )
 
 var (
@@ -32,10 +33,20 @@ var (
 	ErrReplicationFailed     = errors.New("command replication failed (but will keep retrying)")
 )
 
+func init() {
+	if MaximumElectionTimeoutMs <= MinimumElectionTimeoutMs {
+		panic(fmt.Sprintf(
+			"MaximumElectionTimeoutMs (%d) must be > MinimumElectionTimeoutMs (%d)",
+			MaximumElectionTimeoutMs,
+			MinimumElectionTimeoutMs,
+		))
+	}
+}
+
 // ElectionTimeout returns a variable time.Duration, between
 // MinimumElectionTimeoutMs and twice that value.
 func ElectionTimeout() time.Duration {
-	n := rand.Intn(MinimumElectionTimeoutMs)
+	n := rand.Intn(MaximumElectionTimeoutMs - MinimumElectionTimeoutMs)
 	d := MinimumElectionTimeoutMs + n
 	return time.Duration(d) * time.Millisecond
 }
@@ -508,6 +519,8 @@ func (ni *nextIndex) Set(id, index uint64) {
 // The AppendEntries request we build represents our best attempt at a "delta"
 // between our log and the follower's log. The passed nextIndex structure
 // manages that state.
+//
+// flush is synchronous and can block forever if the peer is nonresponsive.
 func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	peerId := peer.Id()
 	currentTerm := s.term
@@ -527,13 +540,27 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	}
 	if !resp.Success {
 		ni.Decrement(peerId)
-		return fmt.Errorf("%d rejected AppendEntries RPC", peer.Id()) // TODO ErrAppendEntriesRejected
+		return ErrAppendEntriesRejected
 	}
 
 	if len(entries) > 0 {
 		ni.Set(peer.Id(), entries[len(entries)-1].Index)
 	}
 	return nil
+}
+
+// flushTimeout calls flush, and returns ErrTimeout if it doesn't return
+// within the given timeout. This can leak goroutines if your peers are
+// nonresponsive for a long time.
+func (s *Server) flushTimeout(peer Peer, ni *nextIndex, timeout time.Duration) error {
+	err := make(chan error)
+	go func() { err <- s.flush(peer, ni) }()
+	select {
+	case e := <-err:
+		return e
+	case <-time.After(timeout):
+		return ErrTimeout
+	}
 }
 
 func (s *Server) leaderSelect() {
@@ -548,7 +575,7 @@ func (s *Server) leaderSelect() {
 	// communication from leader to follower was being rejected and we were
 	// doing the decrement. This was just annoying, except if you manage to
 	// sneak in a command before the first heartbeat. Then, it will never get
-	// properly replicated (it seems).
+	// properly replicated (it seemed).
 	ni := newNextIndex(s.peers, s.log.LastIndex()) // +1)
 
 	heartbeatTick := time.Tick(BroadcastInterval())
@@ -561,6 +588,7 @@ func (s *Server) leaderSelect() {
 			return
 
 		case t := <-s.commandChan:
+
 			// Append the command to our (leader) log
 			currentTerm := s.term
 			entry := LogEntry{
@@ -576,13 +604,15 @@ func (s *Server) leaderSelect() {
 			// From here forward, we'll always attempt to replicate the command
 			// to our followers, via the heartbeat mechanism. This timeout is
 			// purely for our present response to the client.
-			timeout := time.After(ElectionTimeout())
+			timeout := time.After(time.Duration(MinimumElectionTimeoutMs) * time.Millisecond)
 
 			// Scatter flush requests to all peers
 			recipients := s.peers.Except(s.Id)
 			responses := make(chan error, len(recipients))
 			for _, peer := range recipients {
 				go func(peer0 Peer) {
+					// We can use a blocking flush here, because the timeout is
+					// handled at the transaction layer.
 					err := s.flush(peer0, ni)
 					if err != nil {
 						s.logGeneric("replicate: flush to %d: %s", peer0.Id(), err)
@@ -626,9 +656,14 @@ func (s *Server) leaderSelect() {
 					panic(err)
 				}
 				for _, peer := range s.peers.Except(s.Id) {
-					s.flush(peer, ni) // TODO should this be parallelized?
+					// Technically, we don't need to send this flush: it will
+					// get replicated on the next heartbeat. We do it here
+					// purely to get things pushed out faster, so we can have
+					// "fire and forget" semantics.
+					go s.flush(peer, ni)
 				}
 				t.Err <- nil
+				s.logGeneric("replication and commit of command succeeded")
 				continue
 
 			case <-fail:
@@ -658,7 +693,7 @@ func (s *Server) leaderSelect() {
 			for _, peer := range recipients {
 				go func(peer0 Peer) {
 					defer wg.Done()
-					err := s.flush(peer0, ni)
+					err := s.flushTimeout(peer0, ni, BroadcastInterval())
 					if err != nil {
 						s.logGeneric(
 							"heartbeat: flush to %d: %s (nextIndex now %d)",

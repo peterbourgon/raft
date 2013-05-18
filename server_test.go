@@ -19,9 +19,17 @@ func init() {
 	log.SetFlags(log.Lmicroseconds)
 }
 
+func resetElectionTimeoutMs(newMin, newMax int) (int, int) {
+	oldMin, oldMax := raft.MinimumElectionTimeoutMs, raft.MaximumElectionTimeoutMs
+	raft.MinimumElectionTimeoutMs, raft.MaximumElectionTimeoutMs = newMin, newMax
+	return oldMin, oldMax
+}
+
 func TestFollowerToCandidate(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
+	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
@@ -37,34 +45,30 @@ func TestFollowerToCandidate(t *testing.T) {
 	server.Start()
 	defer func() { server.Stop(); t.Logf("server stopped") }()
 
-	began := time.Now()
-	cutoff := began.Add(2 * raft.ElectionTimeout())
+	minimum := time.Duration(raft.MaximumElectionTimeoutMs) * time.Millisecond
+	time.Sleep(minimum)
+
+	cutoff := time.Now().Add(2 * minimum)
 	backoff := raft.BroadcastInterval()
 	for {
 		if time.Now().After(cutoff) {
 			t.Fatal("failed to become Candidate")
 		}
 		if state := server.State(); state != raft.Candidate {
-			//t.Logf("after %15s, %s; retry", time.Since(began), state)
 			time.Sleep(backoff)
 			backoff *= 2
 			continue
 		}
-		t.Logf("became Candidate after %s", time.Since(began))
+		t.Logf("became Candidate")
 		break
-	}
-
-	d := 2 * raft.ElectionTimeout()
-	time.Sleep(d)
-
-	if server.State() != raft.Candidate {
-		t.Fatalf("after %s, not Candidate", d.String())
 	}
 }
 
 func TestCandidateToLeader(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
+	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
@@ -76,20 +80,21 @@ func TestCandidateToLeader(t *testing.T) {
 	server.Start()
 	defer func() { server.Stop(); t.Logf("server stopped") }()
 
-	began := time.Now()
-	cutoff := began.Add(2 * raft.ElectionTimeout())
+	minimum := time.Duration(raft.MaximumElectionTimeoutMs) * time.Millisecond
+	time.Sleep(minimum)
+
+	cutoff := time.Now().Add(2 * minimum)
 	backoff := raft.BroadcastInterval()
 	for {
 		if time.Now().After(cutoff) {
 			t.Fatal("failed to become Leader")
 		}
 		if state := server.State(); state != raft.Leader {
-			//t.Logf("after %15s, %s; retry", time.Since(began), state)
 			time.Sleep(backoff)
 			backoff *= 2
 			continue
 		}
-		t.Logf("became Leader after %s", time.Since(began))
+		t.Logf("became Leader")
 		break
 	}
 }
@@ -97,6 +102,8 @@ func TestCandidateToLeader(t *testing.T) {
 func TestFailedElection(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
+	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
@@ -118,6 +125,8 @@ func TestFailedElection(t *testing.T) {
 func TestSimpleConsensus(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
+	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	type SetValue struct {
 		Value int32 `json:"value"`
@@ -207,6 +216,8 @@ func TestSimpleConsensus(t *testing.T) {
 func TestOrdering(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
+	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	values := rand.Perm(8 + rand.Intn(16))
 	for nServers := 1; nServers <= 6; nServers++ {
@@ -279,7 +290,10 @@ func testOrder(t *testing.T, nServers int, values ...int) {
 		// boot up the cluster
 		for _, server := range servers {
 			server.Start()
-			defer server.Stop()
+			defer func(server0 *raft.Server) {
+				log.Printf("issuing stop command to server %d", server0.Id)
+				server0.Stop()
+			}(server)
 		}
 
 		// send commands
@@ -302,6 +316,9 @@ func testOrder(t *testing.T, nServers int, values ...int) {
 				}
 			}
 		}
+
+		// done sending
+		log.Printf("testOrder done sending %d command(s) to network", len(cmds))
 	}()
 
 	// check the command responses
