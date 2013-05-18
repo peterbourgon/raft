@@ -107,7 +107,7 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 	return nil
 }
 
-func (l *Log) CommitIndex() uint64 {
+func (l *Log) getCommitIndex() uint64 {
 	l.RLock()
 	defer l.RUnlock()
 	return l.commitIndex

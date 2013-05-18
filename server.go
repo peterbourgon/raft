@@ -526,7 +526,7 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	currentTerm := s.term
 	prevLogIndex := ni.PrevLogIndex(peerId)
 	entries, prevLogTerm := s.log.entriesAfter(prevLogIndex, currentTerm)
-	commitIndex := s.log.CommitIndex()
+	commitIndex := s.log.getCommitIndex()
 	resp := peer.AppendEntries(AppendEntries{
 		Term:         currentTerm,
 		LeaderId:     s.Id,
