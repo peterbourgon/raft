@@ -362,8 +362,8 @@ func (s *Server) candidateSelect() {
 	responses, canceler := s.peers.Except(s.Id).RequestVotes(RequestVote{
 		Term:         s.term,
 		CandidateId:  s.Id,
-		LastLogIndex: s.log.LastIndex(),
-		LastLogTerm:  s.log.LastTerm(),
+		LastLogIndex: s.log.lastIndex(),
+		LastLogTerm:  s.log.lastTerm(),
 	})
 	defer canceler.Cancel()
 	s.vote = s.Id      // vote for myself
@@ -525,7 +525,7 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	peerId := peer.Id()
 	currentTerm := s.term
 	prevLogIndex := ni.PrevLogIndex(peerId)
-	entries, prevLogTerm := s.log.EntriesAfter(prevLogIndex, currentTerm)
+	entries, prevLogTerm := s.log.entriesAfter(prevLogIndex, currentTerm)
 	commitIndex := s.log.CommitIndex()
 	resp := peer.AppendEntries(AppendEntries{
 		Term:         currentTerm,
@@ -571,12 +571,12 @@ func (s *Server) leaderSelect() {
 	// follower. When a leader first comes to power it initializes all nextIndex
 	// values to the index just after the last one in its log."
 	//
-	// I changed this from LastIndex+1 to simply LastIndex. Every initial
+	// I changed this from lastIndex+1 to simply lastIndex. Every initial
 	// communication from leader to follower was being rejected and we were
 	// doing the decrement. This was just annoying, except if you manage to
 	// sneak in a command before the first heartbeat. Then, it will never get
 	// properly replicated (it seemed).
-	ni := newNextIndex(s.peers, s.log.LastIndex()) // +1)
+	ni := newNextIndex(s.peers, s.log.lastIndex()) // +1)
 
 	heartbeatTick := time.Tick(BroadcastInterval())
 	for {
@@ -588,15 +588,14 @@ func (s *Server) leaderSelect() {
 			return
 
 		case t := <-s.commandChan:
-
 			// Append the command to our (leader) log
 			currentTerm := s.term
 			entry := LogEntry{
-				Index:   s.log.LastIndex() + 1,
+				Index:   s.log.lastIndex() + 1,
 				Term:    currentTerm,
 				Command: t.Command,
 			}
-			if err := s.log.AppendEntry(entry); err != nil {
+			if err := s.log.appendEntry(entry); err != nil {
 				t.Err <- err
 				continue
 			}
@@ -652,7 +651,7 @@ func (s *Server) leaderSelect() {
 			select {
 			case <-commit:
 				s.logGeneric("replication of command succeeded; committing")
-				if err := s.log.CommitTo(entry.Index, s.responsesChan); err != nil {
+				if err := s.log.commitTo(entry.Index, s.responsesChan); err != nil {
 					panic(err)
 				}
 				for _, peer := range s.peers.Except(s.Id) {
@@ -761,14 +760,14 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	}
 
 	// If the candidate log isn't at least as recent as ours, reject
-	if s.log.LastIndex() > rv.LastLogIndex || s.log.LastTerm() > rv.LastLogTerm {
+	if s.log.lastIndex() > rv.LastLogIndex || s.log.lastTerm() > rv.LastLogTerm {
 		return RequestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
 			reason: fmt.Sprintf(
 				"our index/term %d/%d > %d/%d",
-				s.log.LastIndex(),
-				s.log.LastTerm(),
+				s.log.lastIndex(),
+				s.log.lastTerm(),
 				rv.LastLogIndex,
 				rv.LastLogTerm,
 			),
@@ -823,7 +822,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	s.resetElectionTimeout()
 
 	// Reject if log doesn't contain a matching previous entry
-	if err := s.log.EnsureLastIs(r.PrevLogIndex, r.PrevLogTerm); err != nil {
+	if err := s.log.ensureLastIs(r.PrevLogIndex, r.PrevLogTerm); err != nil {
 		return AppendEntriesResponse{
 			Term:    s.term,
 			Success: false,
@@ -838,7 +837,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// Append entries to the log
 	for i, entry := range r.Entries {
-		if err := s.log.AppendEntry(entry); err != nil {
+		if err := s.log.appendEntry(entry); err != nil {
 			return AppendEntriesResponse{
 				Term:    s.term,
 				Success: false,
@@ -854,7 +853,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// Commit up to the commit index
 	if r.CommitIndex > 0 { // TODO perform this check, or let it fail?
-		if err := s.log.CommitTo(r.CommitIndex, s.responsesChan); err != nil {
+		if err := s.log.commitTo(r.CommitIndex, s.responsesChan); err != nil {
 			return AppendEntriesResponse{
 				Term:    s.term,
 				Success: false,

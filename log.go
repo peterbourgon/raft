@@ -38,13 +38,14 @@ func NewLog(store io.Writer, apply func([]byte) ([]byte, error)) *Log {
 	}
 }
 
-func (l *Log) EntriesAfter(index, defaultTerm uint64) ([]LogEntry, uint64) {
+// entriesAfter returns a slice of LogEntries after (i.e. not including) the
+// passed index, and the term of the final LogEntry in the returned slice, as a
+// convenience to the caller. (This function is only used by a leader attempting
+// to flush log entries to its followers.) defaultTerm is returned as the term
+// when entriesAfter returns an empty slice.
+func (l *Log) entriesAfter(index, defaultTerm uint64) ([]LogEntry, uint64) {
 	l.RLock()
 	defer l.RUnlock()
-	return l.entriesAfter(index, defaultTerm)
-}
-
-func (l *Log) entriesAfter(index, defaultTerm uint64) ([]LogEntry, uint64) {
 	i := 0
 	for ; i < len(l.entries); i++ {
 		if l.entries[i].Index > index {
@@ -58,34 +59,27 @@ func (l *Log) entriesAfter(index, defaultTerm uint64) ([]LogEntry, uint64) {
 	return a, a[len(a)-1].Term
 }
 
-// Contains returns true if a LogEntry with the given index and term exists in
+// contains returns true if a LogEntry with the given index and term exists in
 // the log.
-func (l *Log) Contains(index, term uint64) bool {
+func (l *Log) contains(index, term uint64) bool {
 	l.RLock()
 	defer l.RUnlock()
-	return l.contains(index, term)
-}
-
-func (l *Log) contains(index, term uint64) bool {
 	if index == 0 || uint64(len(l.entries)) < index {
 		return false
 	}
 	return l.entries[index-1].Term == term
 }
 
-// EnsureLastIs deletes all non-committed LogEntries after the given index and
+// ensureLastIs deletes all non-committed LogEntries after the given index and
 // term. It will fail if the given index doesn't exist, has already been
 // committed, or doesn't match the given term.
 //
 // This method satisfies the requirement that a LogEntry in an AppendEntries
 // call precisely follows the accompanying LastLogTerm and LastLogIndex.
-func (l *Log) EnsureLastIs(index, term uint64) error {
+func (l *Log) ensureLastIs(index, term uint64) error {
 	l.Lock()
 	defer l.Unlock()
-	return l.ensureLastIs(index, term)
-}
 
-func (l *Log) ensureLastIs(index, term uint64) error {
 	// Taken loosely from benbjohnson's impl
 
 	if index < l.commitIndex {
@@ -119,49 +113,45 @@ func (l *Log) CommitIndex() uint64 {
 	return l.commitIndex
 }
 
-// LastIndex returns the index of the most recent log entry.
-func (l *Log) LastIndex() uint64 {
+// lastIndex returns the index of the most recent log entry.
+func (l *Log) lastIndex() uint64 {
 	l.RLock()
 	defer l.RUnlock()
-	return l.lastIndex()
+	return l.lastIndexWithLock()
 }
 
-func (l *Log) lastIndex() uint64 {
+func (l *Log) lastIndexWithLock() uint64 {
 	if len(l.entries) <= 0 {
 		return 0
 	}
 	return l.entries[len(l.entries)-1].Index
 }
 
-// LastTerm returns the term of the most recent log entry.
-func (l *Log) LastTerm() uint64 {
+// lastTerm returns the term of the most recent log entry.
+func (l *Log) lastTerm() uint64 {
 	l.RLock()
 	defer l.RUnlock()
-	return l.lastTerm()
+	return l.lastTermWithLock()
 }
 
-func (l *Log) lastTerm() uint64 {
+func (l *Log) lastTermWithLock() uint64 {
 	if len(l.entries) <= 0 {
 		return 0
 	}
 	return l.entries[len(l.entries)-1].Term
 }
 
-// AppendEntry appends the passed log entry to the log.
+// appendEntry appends the passed log entry to the log.
 // It will return an error if any condition is violated.
-func (l *Log) AppendEntry(entry LogEntry) error {
+func (l *Log) appendEntry(entry LogEntry) error {
 	l.Lock()
 	defer l.Unlock()
-	return l.appendEntry(entry)
-}
-
-func (l *Log) appendEntry(entry LogEntry) error {
 	if len(l.entries) > 0 {
-		lastTerm := l.lastTerm()
+		lastTerm := l.lastTermWithLock()
 		if entry.Term < lastTerm {
 			return ErrTermTooSmall
 		}
-		if entry.Term == lastTerm && entry.Index <= l.lastIndex() {
+		if entry.Term == lastTerm && entry.Index <= l.lastIndexWithLock() {
 			return ErrIndexTooSmall
 		}
 	}
@@ -170,16 +160,12 @@ func (l *Log) appendEntry(entry LogEntry) error {
 	return nil
 }
 
-// CommitTo commits all log entries up to the passed commitIndex. Commit means:
+// commitTo commits all log entries up to the passed commitIndex. Commit means:
 // synchronize the log entry to persistent storage, and call the state machine
 // execute function for the log entry's command.
-func (l *Log) CommitTo(commitIndex uint64, responses chan<- []byte) error {
+func (l *Log) commitTo(commitIndex uint64, responses chan<- []byte) error {
 	l.Lock()
 	defer l.Unlock()
-	return l.commitTo(commitIndex, responses)
-}
-
-func (l *Log) commitTo(commitIndex uint64, responses chan<- []byte) error {
 	// Reject old commit indexes
 	if commitIndex < l.commitIndex {
 		return ErrIndexTooSmall
@@ -212,11 +198,11 @@ func (l *Log) commitTo(commitIndex uint64, responses chan<- []byte) error {
 	return nil
 }
 
-// LogEntry is the atomic unit being managed by the distributed log.
-// A LogEntry always has an index (monotonically increasing), a Term in which
-// the Raft network leader first sees the entry, and a Command. The Command is
-// what gets executed against the Raft node's state machine when the LogEntry
-// is replicated throughout the Raft network.
+// LogEntry is the atomic unit being managed by the distributed log. A LogEntry
+// always has an index (monotonically increasing), a term in which the Raft
+// network leader first sees the entry, and a command. The command is what gets
+// executed against the node state machine when the LogEntry is successfully
+// replicated.
 type LogEntry struct {
 	Index   uint64 `json:"index"`
 	Term    uint64 `json:"term"` // when received by leader
