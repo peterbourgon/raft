@@ -10,19 +10,18 @@ var (
 	ErrInvalidRequest = errors.New("invalid request")
 )
 
-// Peer is anything which provides a Raft-domain interface to a Server. Peer is
-// an interface to facilitate making Servers available over different transport
-// mechanisms (e.g. pure local, net/rpc, Protobufs, HTTP...). All Peers should
-// be 1:1 with a Server.
+// Peer is anything which provides a Raft-domain interface to a server. Peer is
+// an interface to facilitate making servers available over different transport
+// mechanisms (e.g. pure local, net/rpc, Protobufs, HTTP...). All peers should
+// be 1:1 with a server.
 type Peer interface {
 	Id() uint64
 	AppendEntries(AppendEntries) AppendEntriesResponse
 	RequestVote(RequestVote) RequestVoteResponse
 	Command([]byte) error
-	CommandResponses() <-chan []byte
 }
 
-// LocalPeer is the simplest kind of Peer, mapped to a Server in the
+// LocalPeer is the simplest kind of peer, mapped to a server in the
 // same process-space. Useful for testing and demonstration; not so
 // useful for networks of independent processes.
 type LocalPeer struct {
@@ -43,10 +42,6 @@ func (p *LocalPeer) RequestVote(rv RequestVote) RequestVoteResponse {
 
 func (p *LocalPeer) Command(cmd []byte) error {
 	return p.server.Command(cmd)
-}
-
-func (p *LocalPeer) CommandResponses() <-chan []byte {
-	return p.server.CommandResponses()
 }
 
 func RequestVoteTimeout(p Peer, rv RequestVote, timeout time.Duration) (RequestVoteResponse, error) {
