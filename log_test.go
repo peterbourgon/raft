@@ -103,15 +103,11 @@ func TestLogEntryEncodeDecode(t *testing.T) {
 			continue
 		}
 		t.Logf("%v: Encode: %s", logEntry, strings.TrimSpace(b.String()))
-		sz := b.Len()
 
 		var e LogEntry
-		if n, err := e.Decode(b); err != nil {
+		if err := e.Decode(b); err != nil {
 			t.Errorf("%v: Decode: %s", logEntry, err)
-		} else if n != sz {
-			t.Errorf("%v: Decode: expected %d, decoded %d", logEntry, sz, n)
 		}
-
 	}
 }
 
@@ -276,4 +272,85 @@ func TestLogTruncation(t *testing.T) {
 	if !log.contains(2, 1) {
 		t.Fatal("(2,1) should still exist but it seems to be missing")
 	}
+}
+
+func TestCleanLogRecovery(t *testing.T) {
+	lines := []string{
+		`02869b0c 0000000000000001 0000000000000001 {}`,
+		`3bfe364c 0000000000000002 0000000000000001 {}`,
+		`6b76285c 0000000000000003 0000000000000002 {}`,
+	}
+
+	buf := bytes.NewBufferString(strings.Join(lines, "\n") + "\n")
+	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
+	log := NewLog(buf, noop)
+
+	if expected, got := len(lines), len(log.entries); expected != got {
+		t.Fatalf("expected %d, got %d", expected, got)
+	}
+
+	if !log.contains(1, 1) {
+		t.Errorf("log doesn't contain index=1 term=1")
+	}
+	if !log.contains(2, 1) {
+		t.Errorf("log doesn't contain index=2 term=1")
+	}
+	if !log.contains(3, 2) {
+		t.Errorf("log doesn't contain index=3 term=2")
+	}
+
+	if err := log.appendEntry(LogEntry{
+		Index:   4,
+		Term:    3,
+		Command: []byte(`{"foo": "bar"}`),
+	}); err != nil {
+		t.Fatalf("append entry: %s", err)
+	}
+	if expected, got := 4, len(log.entries); expected != got {
+		t.Fatalf("expected %d, got %d", expected, got)
+	}
+	if !log.contains(4, 3) {
+		t.Errorf("log doesn't contain index=4 term=3")
+	}
+}
+
+func TestCorruptedLogRecovery(t *testing.T) {
+	lines := []string{
+		`02869b0c 0000000000000001 0000000000000001 {}`,
+		`3000000c 0000000000000002 0000000000000001 {}`, // bad line
+		`6b76285c 0000000000000003 0000000000000002 {}`,
+	}
+
+	buf := bytes.NewBufferString(strings.Join(lines, "\n") + "\n")
+	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
+	log := NewLog(buf, noop)
+
+	if expected, got := 1, len(log.entries); expected != got {
+		t.Fatalf("expected %d, got %d", expected, got)
+	}
+
+	if !log.contains(1, 1) {
+		t.Errorf("log doesn't contain index=1 term=1")
+	}
+	if log.contains(2, 1) {
+		t.Errorf("log contains corrupted index=2 term=1")
+	}
+	if log.contains(3, 2) {
+		t.Errorf("log contains corrupted index=3 term=2")
+	}
+
+	if err := log.appendEntry(LogEntry{
+		Index:   4,
+		Term:    3,
+		Command: []byte(`{"foo": "bar"}`),
+	}); err != nil {
+		t.Fatalf("append entry: %s", err)
+	}
+	if expected, got := 2, len(log.entries); expected != got {
+		t.Fatalf("expected %d, got %d", expected, got)
+	}
+	if !log.contains(4, 3) {
+		t.Errorf("log doesn't contain index=4 term=3")
+	}
+
 }

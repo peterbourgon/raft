@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -16,6 +15,7 @@ var (
 	ErrIndexTooSmall   = errors.New("index too small")
 	ErrIndexTooBig     = errors.New("commit index too big")
 	ErrInvalidChecksum = errors.New("invalid checksum")
+	ErrInvalidLogLine  = errors.New("invalid log line")
 	ErrNoCommand       = errors.New("no command")
 	ErrBadIndex        = errors.New("bad index")
 	ErrBadTerm         = errors.New("bad term")
@@ -29,12 +29,32 @@ type Log struct {
 	apply       func([]byte) ([]byte, error)
 }
 
-func NewLog(store io.Writer, apply func([]byte) ([]byte, error)) *Log {
-	return &Log{
+func NewLog(store io.ReadWriter, apply func([]byte) ([]byte, error)) *Log {
+	l := &Log{
 		store:       store,
 		entries:     []LogEntry{},
 		commitIndex: 0,
 		apply:       apply,
+	}
+	l.recover(store)
+	return l
+}
+
+// recover reads from the Log's store, to populate the log with LogEntries
+// from persistent storage. It should be called once, at Log instantiation.
+func (l *Log) recover(r io.Reader) error {
+	for {
+		var entry LogEntry
+		switch err := entry.Decode(r); err {
+		case io.EOF:
+			return nil // successful completion
+		default:
+			return err // unsuccessful completion
+		case nil:
+			if err = l.appendEntry(entry); err != nil {
+				return err
+			}
+		}
 	}
 }
 
@@ -64,10 +84,17 @@ func (l *Log) entriesAfter(index, defaultTerm uint64) ([]LogEntry, uint64) {
 func (l *Log) contains(index, term uint64) bool {
 	l.RLock()
 	defer l.RUnlock()
-	if index == 0 || uint64(len(l.entries)) < index {
-		return false
+
+	// It's not necessarily true that l.entries[i] has index == i.
+	for _, entry := range l.entries {
+		if entry.Index == index && entry.Term == term {
+			return true
+		}
+		if entry.Index > index || entry.Term > term {
+			break
+		}
 	}
-	return l.entries[index-1].Term == term
+	return false
 }
 
 // ensureLastIs deletes all non-committed LogEntries after the given index and
@@ -231,53 +258,49 @@ func (e *LogEntry) Encode(w io.Writer) error {
 	return err
 }
 
-// Decode deserializes the log entry from the passed io.Reader.
-// Decode returns the number of bytes read.
-func (e *LogEntry) Decode(r io.Reader) (int, error) {
-	pos := 0
-
-	// Read the expected checksum first.
+// Decode deserializes one LogEntry from the passed io.Reader.
+func (e *LogEntry) Decode(r io.Reader) error {
 	var readChecksum uint32
-	if _, err := fmt.Fscanf(r, "%08x", &readChecksum); err != nil {
-		return pos, err
-	}
-	pos += 8
-
-	// Read the rest of the line.
-	rd := bufio.NewReader(r)
-	if c, _ := rd.ReadByte(); c != ' ' {
-		return pos, fmt.Errorf("LogEntry: Decode: expected space, got %02x", c)
-	}
-	pos += 1
-
-	line, err := rd.ReadString('\n')
-	pos += len(line)
-	if err == io.EOF {
-		return pos, err
-	} else if err != nil {
-		return pos, err
-	}
-	b := bytes.NewBufferString(line)
-
-	computedChecksum := crc32.ChecksumIEEE(b.Bytes())
-	if readChecksum != computedChecksum {
-		return pos, ErrInvalidChecksum
+	if _, err := fmt.Fscanf(r, "%08x ", &readChecksum); err != nil {
+		return err
 	}
 
-	if _, err = fmt.Fscanf(b, "%016x %016x ", &e.Index, &e.Term); err != nil {
-		return pos, fmt.Errorf("LogEntry: Decode: scan: %s", err)
-	}
-	e.Command, err = b.ReadBytes('\n')
-	if err != nil {
-		return pos, err
-	}
-	bytes.TrimSpace(e.Command)
-
-	// Make sure there's only an EOF remaining.
-	c, err := b.ReadByte()
-	if err != io.EOF {
-		return pos, fmt.Errorf("LogEntry: Decode: expected EOF, got %02x", c)
+	if _, err := fmt.Fscanf(r, "%016x ", &e.Index); err != nil {
+		return err
 	}
 
-	return pos, nil
+	if _, err := fmt.Fscanf(r, "%016x ", &e.Term); err != nil {
+		return err
+	}
+
+	if err := consumeUntil(r, '\n', &e.Command); err != nil {
+		return err
+	}
+
+	b := fmt.Sprintf("%016x %016x %s\n", e.Index, e.Term, e.Command)
+	computedChecksum := crc32.ChecksumIEEE([]byte(b))
+	if computedChecksum != readChecksum {
+		return ErrInvalidChecksum
+	}
+
+	return nil
+}
+
+// consumeUntil does a series of 1-byte Reads from the passed io.Reader
+// until it reaches delim, or EOF. This is pretty inefficient.
+func consumeUntil(r io.Reader, delim byte, dst *[]byte) error {
+	p := make([]byte, 1)
+	for {
+		n, err := r.Read(p)
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return io.ErrUnexpectedEOF
+		}
+		if p[0] == delim {
+			return nil
+		}
+		*dst = append(*dst, p[0])
+	}
 }
