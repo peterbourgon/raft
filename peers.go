@@ -93,13 +93,13 @@ func (p Peers) Quorum() int {
 	}
 }
 
-// RequestVotes sends the passed RequestVote RPC to every peer in Peers. It
-// forwards responses along the returned RequestVoteResponse channel. It calls
-// RequestVoteTimeout with a timeout of BroadcastInterval * 2 (chosen
-// arbitrarily). Peers that don't respond within the timeout are retried
-// forever. The retry loop stops only when all peers have responded, or a Cancel
-// signal is sent via the returned Canceler.
-func (p Peers) RequestVotes(r RequestVote) (chan RequestVoteResponse, Canceler) {
+// requestVotes sends the passed RequestVote RPC to every peer in Peers. It
+// forwards responses along the returned RequestVoteResponse channel. It makes
+// the RPCs with a timeout of BroadcastInterval * 2 (chosen arbitrarily). Peers
+// that don't respond within the timeout are retried forever. The retry loop
+// stops only when all peers have responded, or a Cancel signal is sent via the
+// returned Canceler.
+func (p Peers) requestVotes(r RequestVote) (chan RequestVoteResponse, Canceler) {
 	// "[A server entering the candidate stage] issues RequestVote RPCs in
 	// parallel to each of the other servers in the cluster. If the candidate
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
@@ -117,8 +117,8 @@ func (p Peers) RequestVotes(r RequestVote) (chan RequestVoteResponse, Canceler) 
 	}
 
 	go func() {
-		// we loop until all Peers have given us a response
-		// track which Peers have responded
+		// We loop until all Peers have given us a response.
+		// Track which Peers have responded.
 		respondedAlready := Peers{} // none yet
 
 		for {

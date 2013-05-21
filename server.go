@@ -359,7 +359,7 @@ func (s *Server) candidateSelect() {
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
 	s.leader = unknownLeader
-	responses, canceler := s.peers.Except(s.Id).RequestVotes(RequestVote{
+	responses, canceler := s.peers.Except(s.Id).requestVotes(RequestVote{
 		Term:         s.term,
 		CandidateId:  s.Id,
 		LastLogIndex: s.log.lastIndex(),
