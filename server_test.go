@@ -33,10 +33,7 @@ func TestFollowerToCandidate(t *testing.T) {
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(raft.Peers{
-		2: nonresponsivePeer(2),
-		3: nonresponsivePeer(3),
-	})
+	server.SetPeers(raft.MakePeers(nonresponsivePeer(2), nonresponsivePeer(3)))
 	go drainTo(&synchronizedBuffer{}, server.CommandResponses())
 	if server.State() != raft.Follower {
 		t.Fatalf("didn't start as Follower")
@@ -72,11 +69,7 @@ func TestCandidateToLeader(t *testing.T) {
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(raft.Peers{
-		1: nonresponsivePeer(1),
-		2: approvingPeer(2),
-		3: nonresponsivePeer(3),
-	})
+	server.SetPeers(raft.MakePeers(nonresponsivePeer(1), approvingPeer(2), nonresponsivePeer(3)))
 	server.Start()
 	defer func() { server.Stop(); t.Logf("server stopped") }()
 
@@ -107,10 +100,7 @@ func TestFailedElection(t *testing.T) {
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(raft.Peers{
-		2: disapprovingPeer(2),
-		3: nonresponsivePeer(3),
-	})
+	server.SetPeers(raft.MakePeers(disapprovingPeer(2), nonresponsivePeer(3)))
 	go drainTo(&synchronizedBuffer{}, server.CommandResponses())
 	server.Start()
 	defer func() { server.Stop(); t.Logf("server stopped") }()
@@ -156,11 +146,11 @@ func TestSimpleConsensus(t *testing.T) {
 	s3Responses := &synchronizedBuffer{}
 	go drainTo(s3Responses, s3.CommandResponses())
 
-	peers := map[uint64]raft.Peer{
-		s1.Id: raft.NewLocalPeer(s1),
-		s2.Id: raft.NewLocalPeer(s2),
-		s3.Id: raft.NewLocalPeer(s3),
-	}
+	peers := raft.MakePeers(
+		raft.NewLocalPeer(s1),
+		raft.NewLocalPeer(s2),
+		raft.NewLocalPeer(s3),
+	)
 
 	s1.SetPeers(peers)
 	s2.SetPeers(peers)

@@ -44,7 +44,9 @@ func (p *LocalPeer) Command(cmd []byte) error {
 	return p.server.Command(cmd)
 }
 
-func RequestVoteTimeout(p Peer, rv RequestVote, timeout time.Duration) (RequestVoteResponse, error) {
+// requestVoteTimeout issues the RequestVote to the given peer.
+// If no response is received before timeout, an error is returned.
+func requestVoteTimeout(p Peer, rv RequestVote, timeout time.Duration) (RequestVoteResponse, error) {
 	c := make(chan RequestVoteResponse)
 	go func() { c <- p.RequestVote(rv) }()
 
@@ -59,6 +61,15 @@ func RequestVoteTimeout(p Peer, rv RequestVote, timeout time.Duration) (RequestV
 // Peers is a collection of Peer interfaces. It provides some convenience
 // functions for actions that should apply to multiple Peers.
 type Peers map[uint64]Peer
+
+// MakePeers returns a Peers structure from the passed (vararg) list of peers.
+func MakePeers(peers ...Peer) Peers {
+	p := Peers{}
+	for _, peer := range peers {
+		p[peer.Id()] = peer
+	}
+	return p
+}
 
 func (p Peers) Except(id uint64) Peers {
 	except := Peers{}
@@ -120,7 +131,7 @@ func (p Peers) RequestVotes(r RequestVote) (chan RequestVoteResponse, Canceler) 
 			tupleChan := make(chan tuple, len(notYetResponded))
 			for id, peer := range notYetResponded {
 				go func(id0 uint64, peer0 Peer) {
-					resp, err := RequestVoteTimeout(peer0, r, 2*BroadcastInterval())
+					resp, err := requestVoteTimeout(peer0, r, 2*BroadcastInterval())
 					tupleChan <- tuple{id0, resp, err}
 				}(id, peer)
 			}
