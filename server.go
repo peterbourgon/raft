@@ -603,7 +603,7 @@ func (s *Server) leaderSelect() {
 			// From here forward, we'll always attempt to replicate the command
 			// to our followers, via the heartbeat mechanism. This timeout is
 			// purely for our present response to the client.
-			timeout := time.After(time.Duration(MinimumElectionTimeoutMs) * time.Millisecond)
+			timeout := time.After(BroadcastInterval() * 3) // TODO arbitrary
 
 			// Scatter flush requests to all peers
 			recipients := s.peers.Except(s.Id)
@@ -622,7 +622,7 @@ func (s *Server) leaderSelect() {
 
 			// Gather responses and signal a deposition or successful commit
 			commit := make(chan struct{})
-			fail := make(chan struct{})
+			failed := make(chan struct{})
 			deposed := make(chan struct{})
 			go func() {
 				have, required := 1, s.peers.Quorum()
@@ -644,7 +644,7 @@ func (s *Server) leaderSelect() {
 					close(commit)
 					return
 				}
-				close(fail)
+				close(failed)
 			}()
 
 			// resolve
@@ -657,15 +657,15 @@ func (s *Server) leaderSelect() {
 				for _, peer := range s.peers.Except(s.Id) {
 					// Technically, we don't need to send this flush: it will
 					// get replicated on the next heartbeat. We do it here
-					// purely to get things pushed out faster, so we can have
-					// "fire and forget" semantics.
+					// purely to get things pushed out faster. So it's OK to
+					// have "fire and forget" semantics.
 					go s.flush(peer, ni)
 				}
 				t.Err <- nil
 				s.logGeneric("replication and commit of command succeeded")
 				continue
 
-			case <-fail:
+			case <-failed:
 				s.logGeneric("replication of command failed")
 				t.Err <- ErrReplicationFailed
 				continue

@@ -1,10 +1,12 @@
 package raft_test
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/peterbourgon/raft"
+	"io"
 	"log"
 	"math/rand"
 	"os"
@@ -204,8 +206,10 @@ func TestSimpleConsensus(t *testing.T) {
 }
 
 func TestOrdering(t *testing.T) {
-	log.SetOutput(&bytes.Buffer{})
+	logBuffer := &bytes.Buffer{}
+	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
+	defer printOnFailure(t, logBuffer)
 	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
 	defer resetElectionTimeoutMs(oldMin, oldMax)
 
@@ -328,6 +332,20 @@ func testOrder(t *testing.T, nServers int, values ...int) {
 //
 //
 //
+
+func printOnFailure(t *testing.T, r io.Reader) {
+	if !t.Failed() {
+		return
+	}
+	rd := bufio.NewReader(r)
+	for {
+		line, err := rd.ReadString('\n')
+		if err != nil {
+			return
+		}
+		t.Logf("> %s", line)
+	}
+}
 
 type synchronizedBuffer struct {
 	sync.RWMutex
