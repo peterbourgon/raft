@@ -45,7 +45,7 @@ func NewLog(store io.ReadWriter, apply func([]byte) ([]byte, error)) *Log {
 func (l *Log) recover(r io.Reader) error {
 	for {
 		var entry LogEntry
-		switch err := entry.Decode(r); err {
+		switch err := entry.decode(r); err {
 		case io.EOF:
 			return nil // successful completion
 		default:
@@ -206,7 +206,7 @@ func (l *Log) commitTo(commitIndex uint64, responses chan<- []byte) error {
 	// Sync entries between our commit index and the passed commit index
 	for i := l.commitIndex; i < commitIndex; i++ {
 		entry := l.entries[i]
-		if err := entry.Encode(l.store); err != nil {
+		if err := entry.encode(l.store); err != nil {
 			return err
 		}
 		resp, err := l.apply(entry.Command)
@@ -236,8 +236,8 @@ type LogEntry struct {
 	Command []byte `json:"command,omitempty"`
 }
 
-// Encode serializes the log entry to the passed io.Writer.
-func (e *LogEntry) Encode(w io.Writer) error {
+// encode serializes the log entry to the passed io.Writer.
+func (e *LogEntry) encode(w io.Writer) error {
 	if len(e.Command) <= 0 {
 		return ErrNoCommand
 	}
@@ -258,8 +258,8 @@ func (e *LogEntry) Encode(w io.Writer) error {
 	return err
 }
 
-// Decode deserializes one LogEntry from the passed io.Reader.
-func (e *LogEntry) Decode(r io.Reader) error {
+// decode deserializes one LogEntry from the passed io.Reader.
+func (e *LogEntry) decode(r io.Reader) error {
 	var readChecksum uint32
 	if _, err := fmt.Fscanf(r, "%08x ", &readChecksum); err != nil {
 		return err

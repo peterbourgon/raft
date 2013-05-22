@@ -98,14 +98,14 @@ func TestLogEntryEncodeDecode(t *testing.T) {
 		LogEntry{math.MaxUint64 - 1, math.MaxUint64, []byte(`{}`)},
 	} {
 		b := &bytes.Buffer{}
-		if err := logEntry.Encode(b); err != nil {
+		if err := logEntry.encode(b); err != nil {
 			t.Errorf("%v: Encode: %s", logEntry, err)
 			continue
 		}
 		t.Logf("%v: Encode: %s", logEntry, strings.TrimSpace(b.String()))
 
 		var e LogEntry
-		if err := e.Decode(b); err != nil {
+		if err := e.decode(b); err != nil {
 			t.Errorf("%v: Decode: %s", logEntry, err)
 		}
 	}
