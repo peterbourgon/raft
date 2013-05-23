@@ -550,15 +550,24 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 }
 
 // flushTimeout calls flush, and returns ErrTimeout if it doesn't return
-// within the given timeout. This can leak goroutines if your peers are
-// nonresponsive for a long time.
+// within the given timeout.
 func (s *Server) flushTimeout(peer Peer, ni *nextIndex, timeout time.Duration) error {
 	err := make(chan error)
-	go func() { err <- s.flush(peer, ni) }()
+	cancel := make(chan struct{})
+	go func() {
+		select {
+		case err <- s.flush(peer, ni):
+			break
+		case <-cancel:
+			break
+		}
+	}()
+
 	select {
 	case e := <-err:
 		return e
 	case <-time.After(timeout):
+		close(cancel)
 		return ErrTimeout
 	}
 }
