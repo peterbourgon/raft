@@ -14,3 +14,4 @@ It's heavily influenced by [benbjohnson's implementation][2].
 * Robust set of transports
 * Configuration changes (joint-consensus mode)
 * Log compaction
+* Complex unit tests (one per scenario described in the paper)
