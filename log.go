@@ -158,6 +158,15 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 		return ErrBadTerm
 	}
 
+	// If we blow away log entries that haven't yet sent responses to clients,
+	// signal the clients to stop waiting, by closing the channel without a
+	// response value.
+	for _, deletedEntry := range l.entries[index:] {
+		if deletedEntry.commandResponse != nil {
+			close(deletedEntry.commandResponse)
+		}
+	}
+
 	l.entries = l.entries[:index]
 	return nil
 }
@@ -248,6 +257,7 @@ func (l *Log) commitTo(commitIndex uint64) error {
 			select {
 			case entry.commandResponse <- resp: // TODO might could `go` this
 				close(entry.commandResponse)
+				entry.commandResponse = nil
 			case <-time.After(BroadcastInterval()): // << ElectionInterval
 				panic("uncoöperative command response receiver")
 			}

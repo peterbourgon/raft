@@ -332,8 +332,12 @@ func testOrder(t *testing.T, nServers int) {
 					t.Fatalf("command=%d/%d peer=%d: failed (%s) -- fatal", i+1, len(cmds), id, err)
 				}
 			}
-			r := <-response
-			log.Printf("command=%d/%d peer=%d: got response %s", i+1, len(cmds), id, string(r))
+			r, ok := <-response
+			if !ok {
+				log.Printf("command=%d/%d peer=%d: truncated, will retry", i+1, len(cmds))
+				goto retry
+			}
+			log.Printf("command=%d/%d peer=%d: OK, got response %s", i+1, len(cmds), string(r))
 		}
 
 		// done sending

@@ -56,3 +56,15 @@ func TestStrongLeader(t *testing.T) {
 		t.Errorf("shouldn't have stepped down")
 	}
 }
+
+func TestLimitedClientPatience(t *testing.T) {
+	// a client issues a command
+
+	// it's written to a leader log
+
+	// but the leader is deposed before he can replicate it
+
+	// the new leader truncates the command away
+
+	// the client should not be stuck forever
+}
