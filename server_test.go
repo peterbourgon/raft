@@ -268,22 +268,6 @@ func testOrder(t *testing.T, nServers int, values ...int) {
 		server.SetPeers(peers)
 	}
 
-	/*
-		// record command responses somewhere
-		//began := time.Now()
-		responses := make([]synchronizedBuffer, len(servers))
-		for i, server := range servers {
-			go func(server0 *raft.Server, i0 int) {
-				for buf := range server0.CommandResponses() {
-					//t.Logf("+%-15s %d: recv: %s", time.Since(began), server0.Id, buf)
-					var r recv
-					json.Unmarshal(buf, &r)
-					responses[i0].Write(append([]byte(fmt.Sprint(r.Recv)), ' '))
-				}
-			}(server, i)
-		}
-	*/
-
 	// define cmds
 	cmds := []send{}
 	for _, v := range values {
