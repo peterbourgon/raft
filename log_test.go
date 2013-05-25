@@ -21,7 +21,7 @@ func TestLogEntriesAfter(t *testing.T) {
 	log := NewLog(buf, noop)
 
 	type tuple struct {
-		After           uint64
+		AfterIndex      uint64
 		ExpectedEntries int
 		ExpectedTerm    uint64
 	}
@@ -33,63 +33,63 @@ func TestLogEntriesAfter(t *testing.T) {
 		{3, 0, 0},
 		{4, 0, 0},
 	} {
-		entries, term := log.entriesAfter(tu.After)
+		entries, term := log.entriesAfter(tu.AfterIndex)
 		if expected, got := tu.ExpectedEntries, len(entries); expected != got {
-			t.Errorf("with %d, After(%d): entries: expected %d got %d", 0, tu.After, expected, got)
+			t.Errorf("with %d, After(%d): entries: expected %d got %d", 0, tu.AfterIndex, expected, got)
 		}
 		if expected, got := tu.ExpectedTerm, term; expected != got {
-			t.Errorf("with %d, After(%d): expected %d got %d", 0, tu.After, expected, got)
+			t.Errorf("with %d, After(%d): expected %d got %d", 0, tu.AfterIndex, expected, got)
 		}
 	}
 
 	log.appendEntry(LogEntry{1, 1, c, oneshot()})
 	for _, tu := range []tuple{
-		{0, 1, 1},
+		{0, 1, 0},
 		{1, 0, 1},
 		{2, 0, 1},
 		{3, 0, 1},
 		{4, 0, 1},
 	} {
-		entries, term := log.entriesAfter(tu.After)
+		entries, term := log.entriesAfter(tu.AfterIndex)
 		if expected, got := tu.ExpectedEntries, len(entries); expected != got {
-			t.Errorf("with %d, After(%d): entries: expected %d got %d", 1, tu.After, expected, got)
+			t.Errorf("with %d, After(%d): entries: expected %d got %d", 1, tu.AfterIndex, expected, got)
 		}
 		if expected, got := tu.ExpectedTerm, term; expected != got {
-			t.Errorf("with %d, After(%d): term: expected %d got %d", 1, tu.After, expected, got)
+			t.Errorf("with %d, After(%d): term: expected %d got %d", 1, tu.AfterIndex, expected, got)
 		}
 	}
 
 	log.appendEntry(LogEntry{2, 1, c, oneshot()})
 	for _, tu := range []tuple{
-		{0, 2, 1},
+		{0, 2, 0},
 		{1, 1, 1},
 		{2, 0, 1},
 		{3, 0, 1},
 		{4, 0, 1},
 	} {
-		entries, term := log.entriesAfter(tu.After)
+		entries, term := log.entriesAfter(tu.AfterIndex)
 		if expected, got := tu.ExpectedEntries, len(entries); expected != got {
-			t.Errorf("with %d, After(%d): entries: expected %d got %d", 2, tu.After, expected, got)
+			t.Errorf("with %d, After(%d): entries: expected %d got %d", 2, tu.AfterIndex, expected, got)
 		}
 		if expected, got := tu.ExpectedTerm, term; expected != got {
-			t.Errorf("with %d, After(%d): term: expected %d got %d", 2, tu.After, expected, got)
+			t.Errorf("with %d, After(%d): term: expected %d got %d", 2, tu.AfterIndex, expected, got)
 		}
 	}
 
 	log.appendEntry(LogEntry{3, 2, c, oneshot()})
 	for _, tu := range []tuple{
-		{0, 3, 2},
-		{1, 2, 2},
-		{2, 1, 2},
+		{0, 3, 0},
+		{1, 2, 1},
+		{2, 1, 1},
 		{3, 0, 2},
 		{4, 0, 2},
 	} {
-		entries, term := log.entriesAfter(tu.After)
+		entries, term := log.entriesAfter(tu.AfterIndex)
 		if expected, got := tu.ExpectedEntries, len(entries); expected != got {
-			t.Errorf("with %d, After(%d): entries: expected %d got %d", 3, tu.After, expected, got)
+			t.Errorf("with %d, After(%d): entries: expected %d got %d", 3, tu.AfterIndex, expected, got)
 		}
 		if expected, got := tu.ExpectedTerm, term; expected != got {
-			t.Errorf("with %d, After(%d): term: expected %d got %d", 3, tu.After, expected, got)
+			t.Errorf("with %d, After(%d): term: expected %d got %d", 3, tu.AfterIndex, expected, got)
 		}
 	}
 }

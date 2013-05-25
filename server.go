@@ -330,8 +330,9 @@ func (s *Server) followerSelect() {
 			// transitions to candidate state."
 			s.logGeneric("election timeout, becoming candidate")
 			s.term++
-			s.state.Set(Candidate)
+			s.vote = 0
 			s.leader = unknownLeader
+			s.state.Set(Candidate)
 			s.resetElectionTimeout()
 			return
 

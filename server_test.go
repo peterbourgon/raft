@@ -334,10 +334,10 @@ func testOrder(t *testing.T, nServers int) {
 			}
 			r, ok := <-response
 			if !ok {
-				log.Printf("command=%d/%d peer=%d: truncated, will retry", i+1, len(cmds))
+				log.Printf("command=%d/%d peer=%d: truncated, will retry", i+1, len(cmds), id)
 				goto retry
 			}
-			log.Printf("command=%d/%d peer=%d: OK, got response %s", i+1, len(cmds), string(r))
+			log.Printf("command=%d/%d peer=%d: OK, got response %s", i+1, len(cmds), id, string(r))
 		}
 
 		// done sending

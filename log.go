@@ -59,7 +59,7 @@ func (l *Log) recover(r io.Reader) error {
 }
 
 // entriesAfter returns a slice of log entries after (i.e. not including) the
-// passed index, and the term of the final log entry in the returned slice, as a
+// passed index, and the term of the log entry specified by index, as a
 // convenience to the caller. (This function is only used by a leader attempting
 // to flush log entries to its followers.)
 //
@@ -75,16 +75,13 @@ func (l *Log) entriesAfter(index uint64) ([]LogEntry, uint64) {
 	l.RLock()
 	defer l.RUnlock()
 
-	lastTerm := uint64(0)
-	if len(l.entries) > 0 {
-		lastTerm = l.entries[len(l.entries)-1].Term
-	}
-
 	i := 0
+	lastTerm := uint64(0)
 	for ; i < len(l.entries); i++ {
 		if l.entries[i].Index > index {
 			break
 		}
+		lastTerm = l.entries[i].Term
 	}
 
 	a := l.entries[i:]
