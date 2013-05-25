@@ -281,7 +281,7 @@ func testOrder(t *testing.T, nServers int) {
 	}
 	peers := raft.Peers{}
 	for _, server := range servers {
-		peers[server.Id] = raft.NewLocalPeer(server)
+		peers[server.Id()] = raft.NewLocalPeer(server)
 	}
 	for _, server := range servers {
 		server.SetPeers(peers)

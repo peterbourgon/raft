@@ -99,19 +99,21 @@ func (s *serverRunning) Set(value bool) {
 // In a typical application, each running process that wants to be part of
 // the distributed state machine will contain a server component.
 type Server struct {
-	Id                uint64 // id of this server (do not modify)
-	state             *serverState
-	running           *serverRunning
-	leader            uint64 // who we believe is the leader
-	term              uint64 // "current term number, which increases monotonically"
-	vote              uint64 // who we voted for this term, if applicable
-	log               *Log
-	peers             Peers
+	id      uint64 // id of this server
+	state   *serverState
+	running *serverRunning
+	leader  uint64 // who we believe is the leader
+	term    uint64 // "current term number, which increases monotonically"
+	vote    uint64 // who we voted for this term, if applicable
+	log     *Log
+	peers   Peers
+
 	appendEntriesChan chan appendEntriesTuple
 	requestVoteChan   chan requestVoteTuple
 	commandChan       chan commandTuple
-	electionTick      <-chan time.Time
-	quit              chan chan struct{}
+
+	electionTick <-chan time.Time
+	quit         chan chan struct{}
 }
 
 // NewServer returns an initialized, un-started server.
@@ -125,7 +127,7 @@ func NewServer(id uint64, store io.ReadWriter, apply func([]byte) ([]byte, error
 	}
 
 	s := &Server{
-		Id:                id,
+		id:                id,
 		state:             &serverState{value: Follower}, // "when servers start up they begin as followers"
 		running:           &serverRunning{value: false},
 		leader:            unknownLeader, // unknown at startup
@@ -140,6 +142,8 @@ func NewServer(id uint64, store io.ReadWriter, apply func([]byte) ([]byte, error
 	}
 	return s
 }
+
+func (s *Server) Id() uint64 { return s.id }
 
 // SetPeers injects the set of peers that this server will attempt to
 // communicate with, in its Raft network. The set peers should include a peer
@@ -251,7 +255,7 @@ func (s *Server) resetElectionTimeout() {
 }
 
 func (s *Server) logGeneric(format string, args ...interface{}) {
-	prefix := fmt.Sprintf("id=%d term=%d state=%s: ", s.Id, s.term, s.State())
+	prefix := fmt.Sprintf("id=%d term=%d state=%s: ", s.id, s.term, s.State())
 	log.Printf(prefix+format, args...)
 }
 
@@ -284,7 +288,7 @@ func (s *Server) forwardCommand(t commandTuple) {
 		s.logGeneric("got command, but don't know leader")
 		t.Err <- ErrUnknownLeader
 
-	case s.Id: // I am the leader
+	case s.id: // I am the leader
 		panic("impossible state in forwardCommand")
 
 	default:
@@ -353,14 +357,14 @@ func (s *Server) candidateSelect() {
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
 	s.leader = unknownLeader
-	responses, canceler := s.peers.Except(s.Id).requestVotes(RequestVote{
+	responses, canceler := s.peers.Except(s.id).requestVotes(RequestVote{
 		Term:         s.term,
-		CandidateId:  s.Id,
+		CandidateId:  s.id,
 		LastLogIndex: s.log.lastIndex(),
 		LastLogTerm:  s.log.lastTerm(),
 	})
 	defer canceler.Cancel()
-	s.vote = s.Id      // vote for myself
+	s.vote = s.id      // vote for myself
 	votesReceived := 1 // already have a vote from myself
 	votesRequired := s.peers.Quorum()
 	s.logGeneric("term=%d election started, %d vote(s) required", s.term, votesRequired)
@@ -407,7 +411,7 @@ func (s *Server) candidateSelect() {
 			// "Once a candidate wins an election, it becomes leader."
 			if votesReceived >= votesRequired {
 				s.logGeneric("%d >= %d: win", votesReceived, votesRequired)
-				s.leader = s.Id
+				s.leader = s.id
 				s.state.Set(Leader)
 				s.vote = 0
 				return // win
@@ -523,7 +527,7 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	commitIndex := s.log.getCommitIndex()
 	resp := peer.AppendEntries(AppendEntries{
 		Term:         currentTerm,
-		LeaderId:     s.Id,
+		LeaderId:     s.id,
 		PrevLogIndex: prevLogIndex,
 		PrevLogTerm:  prevLogTerm,
 		Entries:      entries,
@@ -567,7 +571,7 @@ func (s *Server) flushTimeout(peer Peer, ni *nextIndex, timeout time.Duration) e
 }
 
 func (s *Server) leaderSelect() {
-	s.leader = s.Id
+	s.leader = s.id
 
 	// 5.3 Log replication: "The leader maintains a nextIndex for each follower,
 	// which is the index of the next log entry the leader will send to that
@@ -614,15 +618,13 @@ func (s *Server) leaderSelect() {
 			timeout := time.After(time.Duration(MinimumElectionTimeoutMs/3) * time.Millisecond)
 
 			// Scatter flush requests to all peers
-			recipients := s.peers.Except(s.Id)
+			recipients := s.peers.Except(s.id)
 			s.logGeneric("making %d flush request(s)", len(recipients))
 			responses := make(chan error, len(recipients))
 			for _, peer := range recipients {
-				go func(peer0 Peer) {
-					// We can use a blocking flush here, because the timeout is
-					// handled at the transaction layer.
-					responses <- s.flush(peer0, ni)
-				}(peer)
+				// Timeout is handled one level up.
+				// TODO parallelize
+				responses <- s.flush(peer, ni)
 			}
 
 			// Gather responses and signal a deposition or successful commit
@@ -665,7 +667,7 @@ func (s *Server) leaderSelect() {
 				// We can't asynchronously flush: flush may return ErrDeposed,
 				// which requires we abandon our leadership.
 
-				// for _, peer := range s.peers.Except(s.Id) {
+				// for _, peer := range s.peers.Except(s.id) {
 				// 	// Technically, we don't need to send this flush: it will
 				// 	// get replicated on the next heartbeat. We do it here
 				// 	// purely to get things pushed out faster. So it's OK to
@@ -697,12 +699,10 @@ func (s *Server) leaderSelect() {
 			// Heartbeats attempt to sync the follower log with ours.
 			// That requires per-follower state in the form of nextIndex.
 			// A heartbeat can cause us to be deposed.
-			recipients := s.peers.Except(s.Id)
+			recipients := s.peers.Except(s.id)
 			responses := make(chan error, len(recipients))
 			for _, peer := range recipients {
-				go func(peer0 Peer) {
-					responses <- s.flushTimeout(peer0, ni, BroadcastInterval())
-				}(peer)
+				responses <- s.flushTimeout(peer, ni, BroadcastInterval())
 			}
 			for i := 0; i < cap(responses); i++ {
 				switch err := <-responses; err {

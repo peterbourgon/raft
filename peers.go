@@ -30,7 +30,7 @@ type LocalPeer struct {
 
 func NewLocalPeer(server *Server) *LocalPeer { return &LocalPeer{server} }
 
-func (p *LocalPeer) Id() uint64 { return p.server.Id }
+func (p *LocalPeer) Id() uint64 { return p.server.Id() }
 
 func (p *LocalPeer) AppendEntries(ae AppendEntries) AppendEntriesResponse {
 	return p.server.AppendEntries(ae)
