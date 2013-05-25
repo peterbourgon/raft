@@ -13,7 +13,8 @@ var (
 // Peer is anything which provides a Raft-domain interface to a server. Peer is
 // an interface to facilitate making servers available over different transport
 // mechanisms (e.g. pure local, net/rpc, Protobufs, HTTP...). All peers should
-// be 1:1 with a server.
+// be 1:1 with a server. Things that implement Peer exist in the process-space
+// of the local Raft node.
 type Peer interface {
 	Id() uint64
 	AppendEntries(AppendEntries) AppendEntriesResponse

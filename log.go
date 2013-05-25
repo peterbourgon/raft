@@ -61,8 +61,7 @@ func (l *Log) recover(r io.Reader) error {
 // entriesAfter returns a slice of log entries after (i.e. not including) the
 // passed index, and the term of the final log entry in the returned slice, as a
 // convenience to the caller. (This function is only used by a leader attempting
-// to flush log entries to its followers.) defaultTerm is returned as the term
-// when entriesAfter returns an empty slice.
+// to flush log entries to its followers.)
 //
 // This function is called to populate an AppendEntries RPC. That implies they
 // are destined for a follower, which implies the application of the commands
@@ -72,20 +71,28 @@ func (l *Log) recover(r io.Reader) error {
 // transport, and lose their commandResponse channel anyway. But in the case of
 // a LocalPeer (or equivalent) this doesn't happen. So, we must make sure to
 // proactively strip commandResponse channels.
-func (l *Log) entriesAfter(index, defaultTerm uint64) ([]LogEntry, uint64) {
+func (l *Log) entriesAfter(index uint64) ([]LogEntry, uint64) {
 	l.RLock()
 	defer l.RUnlock()
+
+	lastTerm := uint64(0)
+	if len(l.entries) > 0 {
+		lastTerm = l.entries[len(l.entries)-1].Term
+	}
+
 	i := 0
 	for ; i < len(l.entries); i++ {
 		if l.entries[i].Index > index {
 			break
 		}
 	}
+
 	a := l.entries[i:]
 	if len(a) == 0 {
-		return []LogEntry{}, defaultTerm
+		return []LogEntry{}, lastTerm
 	}
-	return stripResponseChannels(a), a[len(a)-1].Term
+
+	return stripResponseChannels(a), lastTerm
 }
 
 func stripResponseChannels(a []LogEntry) []LogEntry {
@@ -216,6 +223,7 @@ func (l *Log) appendEntry(entry LogEntry) error {
 func (l *Log) commitTo(commitIndex uint64) error {
 	l.Lock()
 	defer l.Unlock()
+
 	// Reject old commit indexes
 	if commitIndex < l.commitIndex {
 		return ErrIndexTooSmall

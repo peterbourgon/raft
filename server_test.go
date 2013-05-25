@@ -113,8 +113,10 @@ func TestFailedElection(t *testing.T) {
 }
 
 func TestSimpleConsensus(t *testing.T) {
-	log.SetOutput(&bytes.Buffer{})
+	logBuffer := &bytes.Buffer{}
+	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
+	defer printOnFailure(t, logBuffer)
 	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
 	defer resetElectionTimeoutMs(oldMin, oldMax)
 
@@ -148,9 +150,13 @@ func TestSimpleConsensus(t *testing.T) {
 		}()
 		return c
 	}
+
 	s1Responses := &synchronizedBuffer{}
 	s2Responses := &synchronizedBuffer{}
 	s3Responses := &synchronizedBuffer{}
+	defer func(sb *synchronizedBuffer) { t.Logf("s1 responses: %s", sb.String()) }(s1Responses)
+	defer func(sb *synchronizedBuffer) { t.Logf("s2 responses: %s", sb.String()) }(s2Responses)
+	defer func(sb *synchronizedBuffer) { t.Logf("s3 responses: %s", sb.String()) }(s3Responses)
 
 	peers := raft.MakePeers(
 		raft.NewLocalPeer(s1),
@@ -165,35 +171,32 @@ func TestSimpleConsensus(t *testing.T) {
 	s1.Start()
 	s2.Start()
 	s3.Start()
-	defer func() { s1.Stop(); t.Logf("s1 stopped") }()
-	defer func() { s2.Stop(); t.Logf("s2 stopped") }()
-	defer func() { s3.Stop(); t.Logf("s3 stopped") }()
-
-	time.Sleep(2 * raft.ElectionTimeout())
-
-	cmd := SetValue{42}
-	cmdBuf, err := json.Marshal(cmd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s1.Command(cmdBuf, appendTo(s1Responses)); err != nil {
-		t.Fatal(err)
-	}
+	defer s1.Stop()
+	defer s2.Stop()
+	defer s3.Stop()
 
 	done := make(chan struct{})
 	go func() {
-		d := raft.BroadcastInterval()
+		var v int32 = 42
+		cmdBuf, _ := json.Marshal(SetValue{v})
+		for {
+			err := s1.Command(cmdBuf, appendTo(s1Responses))
+			if err == nil {
+				break
+			}
+			time.Sleep(raft.MinimumElectionTimeout())
+		}
+
 		for {
 			i1l := atomic.LoadInt32(&i1)
 			i2l := atomic.LoadInt32(&i2)
 			i3l := atomic.LoadInt32(&i3)
 			t.Logf("i1=%02d i2=%02d i3=%02d", i1l, i2l, i3l)
-			if i1l == cmd.Value && i2l == cmd.Value && i3l == cmd.Value {
+			if i1l == v && i2l == v && i3l == v {
 				close(done)
 				return
 			}
-			time.Sleep(d)
-			d *= 2
+			time.Sleep(raft.MinimumElectionTimeout())
 		}
 	}()
 
@@ -203,10 +206,6 @@ func TestSimpleConsensus(t *testing.T) {
 	case <-time.After(1 * time.Second):
 		t.Errorf("timeout")
 	}
-
-	t.Logf("s1 responses: %s", s1Responses.String())
-	t.Logf("s2 responses: %s", s2Responses.String())
-	t.Logf("s3 responses: %s", s3Responses.String())
 }
 
 func TestOrdering_1Server(t *testing.T) {
@@ -306,7 +305,7 @@ func testOrder(t *testing.T, nServers int) {
 		for _, server := range servers {
 			server.Start()
 			defer func(server0 *raft.Server) {
-				log.Printf("issuing stop command to server %d", server0.Id)
+				log.Printf("issuing stop command to server %d", server0.Id())
 				server0.Stop()
 			}(server)
 		}
@@ -316,20 +315,25 @@ func testOrder(t *testing.T, nServers int) {
 			id := uint64(rand.Intn(nServers)) + 1
 			peer := peers[id]
 			buf, _ := json.Marshal(cmd)
+			response := make(chan []byte, 1)
 		retry:
 			for {
-				log.Printf("testOrder sending command %d/%d: %s", i+1, len(cmds), buf)
-				switch err := peer.Command(buf, make(chan []byte, 1)); err {
+				log.Printf("command=%d/%d peer=%d: sending %s", i+1, len(cmds), id, buf)
+				switch err := peer.Command(buf, response); err {
 				case nil:
 					log.Printf("command=%d/%d peer=%d: OK", i+1, len(cmds), id)
 					break retry
-				case raft.ErrUnknownLeader, raft.ErrDeposed, raft.ErrTimeout:
+				case raft.ErrUnknownLeader, raft.ErrDeposed:
 					log.Printf("command=%d/%d peer=%d: failed (%s) -- will retry", i+1, len(cmds), id, err)
 					time.Sleep(raft.ElectionTimeout())
+				case raft.ErrTimeout:
+					log.Printf("command=%d/%d peer=%d: timed out -- we'll assume it went through", i+1, len(cmds), id)
 				default:
 					t.Fatalf("command=%d/%d peer=%d: failed (%s) -- fatal", i+1, len(cmds), id, err)
 				}
 			}
+			r := <-response
+			log.Printf("command=%d/%d peer=%d: got response %s", i+1, len(cmds), id, string(r))
 		}
 
 		// done sending

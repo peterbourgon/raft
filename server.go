@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -41,6 +42,14 @@ func init() {
 			MinimumElectionTimeoutMs,
 		))
 	}
+}
+
+// MinimumElectionTimeout returns a constant time.Duration, which is the
+// MinimumElectionTimeMs (in milliseconds). This function exists so you can
+// set raft.MinimumElectionTimeMs in your client, and make decisions in your
+// code path without having to explicitly convert.
+func MinimumElectionTimeout() time.Duration {
+	return time.Duration(MinimumElectionTimeoutMs) * time.Millisecond
 }
 
 // ElectionTimeout returns a variable time.Duration, between
@@ -308,6 +317,7 @@ func (s *Server) followerSelect() {
 	for {
 		select {
 		case q := <-s.quit:
+			s.logGeneric("got quit signal")
 			s.running.Set(false)
 			close(q)
 			return
@@ -330,33 +340,40 @@ func (s *Server) followerSelect() {
 				s.leader = t.Request.LeaderId
 				s.logGeneric("discovered Leader %d", s.leader)
 			}
-			if s.leader != t.Request.LeaderId {
-				s.logGeneric("our leader (%d) conflicts with AppendEntries (%d)", s.leader, t.Request.LeaderId)
-				t.Response <- AppendEntriesResponse{
-					Term:    s.term,
-					Success: false,
-					reason:  fmt.Sprintf("inconsistent leader (local=%d, RPC=%d)", s.leader, t.Request.LeaderId),
-				}
-				return
-			}
 			resp, stepDown := s.handleAppendEntries(t.Request)
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
+			if stepDown {
+				// stepDown as a Follower means just to reset the leader
+				s.logGeneric("abandoned our leader (new leader=%d)", t.Request.LeaderId)
+				s.leader = t.Request.LeaderId
+			}
 
 		case t := <-s.requestVoteChan:
 			resp, stepDown := s.handleRequestVote(t.Request)
 			s.logRequestVoteResponse(t.Request, resp, stepDown)
 			t.Response <- resp
+			if stepDown {
+				// stepDown as a Follower means just to reset the leader
+				s.logGeneric("abandoned our leader (new leader unknown)")
+				s.leader = unknownLeader
+			}
 		}
 	}
 }
 
 func (s *Server) candidateSelect() {
+	if s.leader != unknownLeader {
+		panic("known leader when entering candidateSelect")
+	}
+	if s.vote != 0 {
+		panic("existing vote when entering candidateSelect")
+	}
+
 	// "[A server entering the candidate stage] issues RequestVote RPCs in
 	// parallel to each of the other servers in the cluster. If the candidate
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
-	s.leader = unknownLeader
 	responses, canceler := s.peers.Except(s.id).requestVotes(RequestVote{
 		Term:         s.term,
 		CandidateId:  s.id,
@@ -372,8 +389,9 @@ func (s *Server) candidateSelect() {
 	// catch a bad state
 	if votesReceived >= votesRequired {
 		s.logGeneric("%d-node cluster; I win", s.peers.Count())
-		s.vote = unknownLeader
+		s.leader = s.id
 		s.state.Set(Leader)
+		s.vote = 0
 		return
 	}
 
@@ -383,6 +401,7 @@ func (s *Server) candidateSelect() {
 	for {
 		select {
 		case q := <-s.quit:
+			s.logGeneric("got quit signal")
 			s.running.Set(false)
 			close(q)
 			return
@@ -428,10 +447,9 @@ func (s *Server) candidateSelect() {
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("stepping down to Follower (leader=%d)", t.Request.LeaderId)
+				s.logGeneric("after an AppendEntries, stepping down to Follower (leader=%d)", t.Request.LeaderId)
 				s.leader = t.Request.LeaderId
 				s.state.Set(Follower)
-				s.vote = 0
 				return // lose
 			}
 
@@ -441,10 +459,9 @@ func (s *Server) candidateSelect() {
 			s.logRequestVoteResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("stepping down to Follower (leader unknown)")
+				s.logGeneric("after a RequestVote, stepping down to Follower (leader unknown)")
 				s.leader = unknownLeader
 				s.state.Set(Follower)
-				s.vote = 0
 				return // lose
 			}
 
@@ -483,6 +500,23 @@ func newNextIndex(peers Peers, defaultNextIndex uint64) *nextIndex {
 	return ni
 }
 
+func (ni *nextIndex) LowestNextIndex() uint64 {
+	ni.RLock()
+	defer ni.RUnlock()
+
+	if len(ni.m) <= 0 {
+		return 0
+	}
+
+	var i uint64 = math.MaxUint64
+	for _, nextIndex := range ni.m {
+		if nextIndex < i {
+			i = nextIndex
+		}
+	}
+	return i
+}
+
 func (ni *nextIndex) PrevLogIndex(id uint64) uint64 {
 	ni.RLock()
 	defer ni.RUnlock()
@@ -499,7 +533,7 @@ func (ni *nextIndex) Decrement(id uint64) {
 		panic(fmt.Sprintf("peer %d not found", id))
 	} else if i > 0 {
 		// This value can reach 0, so it should not be passed
-		// directly to log.EntriesAfter.
+		// directly to log.entriesAfter.
 		ni.m[id]--
 	}
 }
@@ -523,7 +557,7 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	peerId := peer.Id()
 	currentTerm := s.term
 	prevLogIndex := ni.PrevLogIndex(peerId)
-	entries, prevLogTerm := s.log.entriesAfter(prevLogIndex, currentTerm)
+	entries, prevLogTerm := s.log.entriesAfter(prevLogIndex)
 	commitIndex := s.log.getCommitIndex()
 	resp := peer.AppendEntries(AppendEntries{
 		Term:         currentTerm,
@@ -547,31 +581,45 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	return nil
 }
 
-// flushTimeout calls flush, and returns ErrTimeout if it doesn't return
-// within the given timeout.
-func (s *Server) flushTimeout(peer Peer, ni *nextIndex, timeout time.Duration) error {
-	err := make(chan error)
-	cancel := make(chan struct{})
-	go func() {
-		select {
-		case err <- s.flush(peer, ni):
-			break
-		case <-cancel:
-			break
-		}
-	}()
-
-	select {
-	case e := <-err:
-		return e
-	case <-time.After(timeout):
-		close(cancel)
-		return ErrTimeout
+func (s *Server) concurrentFlush(peers Peers, ni *nextIndex) (int, bool) {
+	type tuple struct {
+		id  uint64
+		err error
 	}
+	responses := make(chan tuple, len(peers))
+	for _, peer := range peers {
+		go func(peer0 Peer) {
+			err0 := make(chan error, 1)
+			go func() { err0 <- s.flush(peer0, ni) }()
+			go func() { time.Sleep(2 * BroadcastInterval()); err0 <- ErrTimeout }()
+			responses <- tuple{peer0.Id(), <-err0}
+		}(peer)
+	}
+
+	successes, stepDown := 0, false
+	for i := 0; i < cap(responses); i++ {
+		switch t := <-responses; t.err {
+		case nil:
+			s.logGeneric("concurrentFlush: peer %d: OK", t.id)
+			successes++
+		case ErrDeposed:
+			s.logGeneric("concurrentFlush: peer %d: deposed!", t.id)
+			stepDown = true
+		default:
+			s.logGeneric("concurrentFlush: peer %d: %s", t.id, t.err)
+			// nothing to do but log and continue
+		}
+	}
+	return successes, stepDown
 }
 
 func (s *Server) leaderSelect() {
-	s.leader = s.id
+	if s.leader != s.id {
+		panic(fmt.Sprintf("leader (%d) not me (%d) when entering leaderSelect", s.leader, s.id))
+	}
+	if s.vote != 0 {
+		panic(fmt.Sprintf("vote (%d) not zero when entering leaderSelect", s.leader, s.id))
+	}
 
 	// 5.3 Log replication: "The leader maintains a nextIndex for each follower,
 	// which is the index of the next log entry the leader will send to that
@@ -583,12 +631,21 @@ func (s *Server) leaderSelect() {
 	// doing the decrement. This was just annoying, except if you manage to
 	// sneak in a command before the first heartbeat. Then, it will never get
 	// properly replicated (it seemed).
-	ni := newNextIndex(s.peers, s.log.lastIndex()) // +1)
+	ni := newNextIndex(s.peers.Except(s.id), s.log.lastIndex()) // +1)
 
-	heartbeatTick := time.Tick(BroadcastInterval())
+	flush := make(chan struct{})
+	heartbeat := time.NewTicker(BroadcastInterval())
+	defer heartbeat.Stop()
+	go func() {
+		for _ = range heartbeat.C {
+			flush <- struct{}{}
+		}
+	}()
+
 	for {
 		select {
 		case q := <-s.quit:
+			s.logGeneric("got quit signal")
 			s.running.Set(false)
 			close(q)
 			return
@@ -607,115 +664,64 @@ func (s *Server) leaderSelect() {
 				t.Err <- err
 				continue
 			}
+			s.logGeneric("after append, commitIndex=%d lastIndex=%d lastTerm=%d", s.log.getCommitIndex(), s.log.lastIndex(), s.log.lastTerm())
 
-			// From here forward, we'll always attempt to replicate the command
-			// to our followers, via the heartbeat mechanism. This timeout is
-			// purely for our present response to the client. It must be well
-			// beneath the minimum election timeout, so we don't block too long
-			// in this select-case and trigger a stupid election.
-			//
-			// TODO may need to take this out of the main leaderSelect loop.
-			timeout := time.After(time.Duration(MinimumElectionTimeoutMs/3) * time.Millisecond)
+			// Now that the entry is in the log, we can fall back to the
+			// normal flushing mechanism to attempt to replicate the entry
+			// and advance the commit index. We trigger a manual flush as a
+			// convenience, so our caller might get a response a bit sooner.
+			go func() { flush <- struct{}{} }()
+			t.Err <- nil
 
-			// Scatter flush requests to all peers
+		case <-flush:
+			// Flushes attempt to sync the follower log with ours.
+			// That requires per-follower state in the form of nextIndex.
+			// After every flush, we check if we can advance our commitIndex.
+			// If so, we do it, and trigger another flush ASAP.
+			// A flush can cause us to be deposed.
 			recipients := s.peers.Except(s.id)
-			s.logGeneric("making %d flush request(s)", len(recipients))
-			responses := make(chan error, len(recipients))
-			for _, peer := range recipients {
-				// Timeout is handled one level up.
-				// TODO parallelize
-				responses <- s.flush(peer, ni)
+
+			// Special case: network of 1
+			if len(recipients) <= 0 {
+				if err := s.log.commitTo(s.log.lastIndex()); err != nil {
+					s.logGeneric("commitTo(%d): %s", s.log.lastIndex(), err)
+					continue
+				}
+				s.logGeneric("after commitTo(%d), commitIndex=%d", s.log.lastIndex(), s.log.getCommitIndex())
+				continue
 			}
 
-			// Gather responses and signal a deposition or successful commit
-			commit := make(chan struct{})
-			failed := make(chan struct{})
-			deposed := make(chan struct{})
-			go func() {
-				have, required := 1, s.peers.Quorum()
-				// a 1-node cluster has have == required, len(recipients) == 0
-				for i := 0; i < len(recipients); i++ {
-					switch err := <-responses; err {
-					case nil:
-						have++
-					case ErrDeposed:
-						s.logGeneric("during command replication, deposed!")
-						close(deposed)
-						return
-					default:
-						s.logGeneric("during command replication, got error: %s", err)
-					}
-					if have >= required {
-						break
-					}
-				}
-				if have >= required {
-					close(commit)
-					return
-				}
-				close(failed)
-			}()
-
-			// resolve
-			select {
-			case <-commit:
-				s.logGeneric("replication of command succeeded; committing")
-				if err := s.log.commitTo(entry.Index); err != nil {
-					panic(err)
-				}
-				s.logGeneric("commit of command succeeded")
-				// We can't asynchronously flush: flush may return ErrDeposed,
-				// which requires we abandon our leadership.
-
-				// for _, peer := range s.peers.Except(s.id) {
-				// 	// Technically, we don't need to send this flush: it will
-				// 	// get replicated on the next heartbeat. We do it here
-				// 	// purely to get things pushed out faster. So it's OK to
-				// 	// have "fire and forget" semantics.
-				// 	go s.flush(peer, ni)
-				// }
-				t.Err <- nil
-				continue
-
-			case <-failed:
-				s.logGeneric("replication of command failed")
-				t.Err <- ErrReplicationFailed
-				continue
-
-			case <-deposed:
-				s.logGeneric("during Command, deposed to Follower (leader unknown)")
-				t.Err <- ErrDeposed
+			// Normal case: network of at-least-2
+			successes, stepDown := s.concurrentFlush(recipients, ni)
+			if stepDown {
+				s.logGeneric("deposed during flush")
 				s.state.Set(Follower)
 				s.leader = unknownLeader
 				return
-
-			case <-timeout:
-				s.logGeneric("replication of command timed out")
-				t.Err <- ErrTimeout
-				continue
 			}
 
-		case <-heartbeatTick:
-			// Heartbeats attempt to sync the follower log with ours.
-			// That requires per-follower state in the form of nextIndex.
-			// A heartbeat can cause us to be deposed.
-			recipients := s.peers.Except(s.id)
-			responses := make(chan error, len(recipients))
-			for _, peer := range recipients {
-				responses <- s.flushTimeout(peer, ni, BroadcastInterval())
-			}
-			for i := 0; i < cap(responses); i++ {
-				switch err := <-responses; err {
-				case nil:
-					continue
-				case ErrDeposed:
-					s.logGeneric("during heartbeat, deposed!")
-					s.state.Set(Follower)
+			// Only when we know all followers accepted the flush can we
+			// consider incrementing commitIndex and pushing out another
+			// round of flushes.
+			if successes == len(recipients) {
+				peersBestIndex := ni.LowestNextIndex()
+				ourLastIndex := s.log.lastIndex()
+				ourCommitIndex := s.log.getCommitIndex()
+				if peersBestIndex > ourLastIndex {
+					// safety check: we've probably been deposed
+					s.logGeneric("peers' best index %d > our lastIndex %d", peersBestIndex, ourLastIndex)
+					s.logGeneric("this is crazy, I'm gonna become a follower")
 					s.leader = unknownLeader
+					s.state.Set(Follower)
 					return
-				default:
-					s.logGeneric("during heartbeat, got error: %s", err)
-					continue
+				}
+				if peersBestIndex > ourCommitIndex {
+					if err := s.log.commitTo(peersBestIndex); err != nil {
+						s.logGeneric("commitTo(%d): %s", peersBestIndex, err)
+						continue // oh well, next time?
+					}
+					s.logGeneric("after commitTo(%d), commitIndex=%d (queueing a flush)", s.log.lastIndex(), s.log.getCommitIndex())
+					go func() { flush <- struct{}{} }()
 				}
 			}
 
@@ -724,10 +730,10 @@ func (s *Server) leaderSelect() {
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
+				s.logGeneric("after an AppendEntries, deposed to Follower (leader=%d)", s.leader)
 				s.leader = t.Request.LeaderId
 				s.state.Set(Follower)
-				s.logGeneric("after an AppendEntries, deposed to Follower (leader=%d)", s.leader)
-				return
+				return // deposed
 			}
 
 		case t := <-s.requestVoteChan:
@@ -735,15 +741,17 @@ func (s *Server) leaderSelect() {
 			s.logRequestVoteResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
+				s.logGeneric("after a RequestVote, deposed to Follower (leader unknown)")
 				s.leader = unknownLeader
 				s.state.Set(Follower)
-				s.logGeneric("after a RequestVote, deposed to Follower (leader unknown)")
-				return
+				return // deposed
 			}
 		}
 	}
 }
 
+// handleRequestVote will modify s.term and s.vote, but nothing else.
+// stepDown means you need to: s.leader=unknownLeader, s.state.Set(Follower).
 func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	// Spec is ambiguous here; basing this (loosely!) on benbjohnson's impl
 
@@ -759,13 +767,28 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	// If the request is from a newer term, reset our state
 	stepDown := false
 	if rv.Term > s.term {
+		s.logGeneric("RequestVote from newer term (%d): we defer", rv.Term)
 		s.term = rv.Term
 		s.vote = 0
+		s.leader = unknownLeader
 		stepDown = true
+	}
+
+	// Special case: if we're the leader, and we haven't been deposed by a more
+	// recent term, then we should always deny the vote
+	if s.State() == Leader && !stepDown {
+		return RequestVoteResponse{
+			Term:        s.term,
+			VoteGranted: false,
+			reason:      "already the leader",
+		}, stepDown
 	}
 
 	// If we've already voted for someone else this term, reject
 	if s.vote != 0 && s.vote != rv.CandidateId {
+		if stepDown {
+			panic("impossible state in handleRequestVote")
+		}
 		return RequestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
@@ -797,6 +820,8 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	}, stepDown
 }
 
+// handleAppendEntries will modify s.term and s.vote, but nothing else.
+// stepDown means you need to: s.leader=r.LeaderId, s.state.Set(Follower).
 func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bool) {
 	// Spec is ambiguous here; basing this on benbjohnson's impl
 

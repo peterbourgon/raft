@@ -19,7 +19,6 @@ func TestLogEntriesAfter(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
 	log := NewLog(buf, noop)
-	defaultTerm := uint64(5)
 
 	type tuple struct {
 		After           uint64
@@ -28,13 +27,13 @@ func TestLogEntriesAfter(t *testing.T) {
 	}
 
 	for _, tu := range []tuple{
-		{0, 0, defaultTerm},
-		{1, 0, defaultTerm},
-		{2, 0, defaultTerm},
-		{3, 0, defaultTerm},
-		{4, 0, defaultTerm},
+		{0, 0, 0},
+		{1, 0, 0},
+		{2, 0, 0},
+		{3, 0, 0},
+		{4, 0, 0},
 	} {
-		entries, term := log.entriesAfter(tu.After, defaultTerm)
+		entries, term := log.entriesAfter(tu.After)
 		if expected, got := tu.ExpectedEntries, len(entries); expected != got {
 			t.Errorf("with %d, After(%d): entries: expected %d got %d", 0, tu.After, expected, got)
 		}
@@ -46,12 +45,12 @@ func TestLogEntriesAfter(t *testing.T) {
 	log.appendEntry(LogEntry{1, 1, c, oneshot()})
 	for _, tu := range []tuple{
 		{0, 1, 1},
-		{1, 0, defaultTerm},
-		{2, 0, defaultTerm},
-		{3, 0, defaultTerm},
-		{4, 0, defaultTerm},
+		{1, 0, 1},
+		{2, 0, 1},
+		{3, 0, 1},
+		{4, 0, 1},
 	} {
-		entries, term := log.entriesAfter(tu.After, defaultTerm)
+		entries, term := log.entriesAfter(tu.After)
 		if expected, got := tu.ExpectedEntries, len(entries); expected != got {
 			t.Errorf("with %d, After(%d): entries: expected %d got %d", 1, tu.After, expected, got)
 		}
@@ -64,11 +63,11 @@ func TestLogEntriesAfter(t *testing.T) {
 	for _, tu := range []tuple{
 		{0, 2, 1},
 		{1, 1, 1},
-		{2, 0, defaultTerm},
-		{3, 0, defaultTerm},
-		{4, 0, defaultTerm},
+		{2, 0, 1},
+		{3, 0, 1},
+		{4, 0, 1},
 	} {
-		entries, term := log.entriesAfter(tu.After, defaultTerm)
+		entries, term := log.entriesAfter(tu.After)
 		if expected, got := tu.ExpectedEntries, len(entries); expected != got {
 			t.Errorf("with %d, After(%d): entries: expected %d got %d", 2, tu.After, expected, got)
 		}
@@ -82,10 +81,10 @@ func TestLogEntriesAfter(t *testing.T) {
 		{0, 3, 2},
 		{1, 2, 2},
 		{2, 1, 2},
-		{3, 0, defaultTerm},
-		{4, 0, defaultTerm},
+		{3, 0, 2},
+		{4, 0, 2},
 	} {
-		entries, term := log.entriesAfter(tu.After, defaultTerm)
+		entries, term := log.entriesAfter(tu.After)
 		if expected, got := tu.ExpectedEntries, len(entries); expected != got {
 			t.Errorf("with %d, After(%d): entries: expected %d got %d", 3, tu.After, expected, got)
 		}
