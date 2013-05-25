@@ -209,32 +209,51 @@ func TestSimpleConsensus(t *testing.T) {
 	t.Logf("s3 responses: %s", s3Responses.String())
 }
 
-func TestOrdering(t *testing.T) {
+func TestOrdering_1Server(t *testing.T) {
+	testOrderTimeout(t, 1, 5*time.Second)
+}
+
+func TestOrdering_2Servers(t *testing.T) {
+	testOrderTimeout(t, 2, 5*time.Second)
+}
+
+func TestOrdering_3Servers(t *testing.T) {
+	testOrderTimeout(t, 3, 5*time.Second)
+}
+
+func TestOrdering_4Servers(t *testing.T) {
+	testOrderTimeout(t, 4, 5*time.Second)
+}
+
+func TestOrdering_5Servers(t *testing.T) {
+	testOrderTimeout(t, 5, 5*time.Second)
+}
+
+func TestOrdering_6Servers(t *testing.T) {
+	testOrderTimeout(t, 6, 5*time.Second)
+}
+
+func testOrderTimeout(t *testing.T, nServers int, timeout time.Duration) {
 	logBuffer := &bytes.Buffer{}
 	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
 	defer printOnFailure(t, logBuffer)
-	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	oldMin, oldMax := resetElectionTimeoutMs(50, 100)
 	defer resetElectionTimeoutMs(oldMin, oldMax)
 
-	values := rand.Perm(8 + rand.Intn(16))
-	for nServers := 1; nServers <= 6; nServers++ {
-		t.Logf("nServers=%d", nServers)
-		done := make(chan struct{})
-		go func() {
-			testOrder(t, nServers, values...)
-			close(done)
-		}()
-		select {
-		case <-done:
-			break
-		case <-time.After(5 * time.Second):
-			t.Fatalf("nServers=%d values=%v timeout (infinite loop?)", nServers, values)
-		}
+	done := make(chan struct{})
+	go func() { testOrder(t, nServers); close(done) }()
+	select {
+	case <-done:
+		break
+	case <-time.After(timeout):
+		t.Fatalf("timeout (infinite loop?)")
 	}
 }
 
-func testOrder(t *testing.T, nServers int, values ...int) {
+func testOrder(t *testing.T, nServers int) {
+	values := rand.Perm(8 + rand.Intn(16))
+
 	// command and response
 	type send struct {
 		Send int `json:"send"`
@@ -299,32 +318,32 @@ func testOrder(t *testing.T, nServers int, values ...int) {
 			buf, _ := json.Marshal(cmd)
 		retry:
 			for {
-				//t.Logf("+%-15s %d: send: %s", time.Since(began), id, buf)
+				log.Printf("testOrder sending command %d/%d: %s", i+1, len(cmds), buf)
 				switch err := peer.Command(buf, make(chan []byte, 1)); err {
 				case nil:
-					//t.Logf("+%-15s %d: send OK: %s", time.Since(began), id, buf)
+					log.Printf("command=%d/%d peer=%d: OK", i+1, len(cmds), id)
 					break retry
-				case raft.ErrUnknownLeader:
-					//t.Logf("+%-15s %d: send failed, no leader, will retry", time.Since(began), id)
+				case raft.ErrUnknownLeader, raft.ErrDeposed, raft.ErrTimeout:
+					log.Printf("command=%d/%d peer=%d: failed (%s) -- will retry", i+1, len(cmds), id, err)
 					time.Sleep(raft.ElectionTimeout())
 				default:
-					t.Fatalf("i=%d peer=%d send failed: %s", i, id, err)
+					t.Fatalf("command=%d/%d peer=%d: failed (%s) -- fatal", i+1, len(cmds), id, err)
 				}
 			}
 		}
 
 		// done sending
 		log.Printf("testOrder done sending %d command(s) to network", len(cmds))
-		time.Sleep(2 * raft.BroadcastInterval()) // replicate
+		time.Sleep(4 * raft.BroadcastInterval()) // time to replicate
 		log.Printf("testOrder shutting servers down")
 	}()
 
 	// check the buffers (state machines)
 	for i, sb := range buffers {
 		expected, got := expectedBuffer.String(), sb.String()
-		t.Logf("%d: state machine: %s", i, got)
+		t.Logf("server %d: state machine: %s", i+1, got)
 		if expected != got {
-			t.Errorf("server %d: expected '%s', got '%s'", i+1, expected, got)
+			t.Fatalf("server %d: expected \n\t'%s', got \n\t'%s'", i+1, expected, got)
 		}
 	}
 }

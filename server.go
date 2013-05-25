@@ -257,8 +257,9 @@ func (s *Server) logGeneric(format string, args ...interface{}) {
 
 func (s *Server) logAppendEntriesResponse(req AppendEntries, resp AppendEntriesResponse, stepDown bool) {
 	s.logGeneric(
-		"got AppendEntries, sz=%d prevIndex/Term=%d/%d commitIndex=%d: responded with success=%v (%s) stepDown=%v",
+		"got AppendEntries, sz=%d leader=%d prevIndex/Term=%d/%d commitIndex=%d: responded with success=%v (%s) stepDown=%v",
 		len(req.Entries),
+		req.LeaderId,
 		req.PrevLogIndex,
 		req.PrevLogTerm,
 		req.CommitIndex,
@@ -291,7 +292,7 @@ func (s *Server) forwardCommand(t commandTuple) {
 		if !ok {
 			panic("invalid state in peers")
 		}
-		s.logGeneric("got command, forwarding to %d", s.leader)
+		s.logGeneric("got command, forwarding to leader (%d)", s.leader)
 		// We're blocking our {follower,candidate}Select function in the
 		// receive-command branch. If we continue to block while forwarding
 		// the command, the leader won't be able to get a response from us!
@@ -362,11 +363,12 @@ func (s *Server) candidateSelect() {
 	s.vote = s.Id      // vote for myself
 	votesReceived := 1 // already have a vote from myself
 	votesRequired := s.peers.Quorum()
-	s.logGeneric("election started, %d vote(s) required", votesRequired)
+	s.logGeneric("term=%d election started, %d vote(s) required", s.term, votesRequired)
 
 	// catch a bad state
 	if votesReceived >= votesRequired {
 		s.logGeneric("%d-node cluster; I win", s.peers.Count())
+		s.vote = unknownLeader
 		s.state.Set(Leader)
 		return
 	}
@@ -619,11 +621,7 @@ func (s *Server) leaderSelect() {
 				go func(peer0 Peer) {
 					// We can use a blocking flush here, because the timeout is
 					// handled at the transaction layer.
-					err := s.flush(peer0, ni)
-					if err != nil {
-						s.logGeneric("replicate: flush to %d: %s", peer0.Id(), err)
-					}
-					responses <- err
+					responses <- s.flush(peer0, ni)
 				}(peer)
 			}
 
@@ -635,13 +633,15 @@ func (s *Server) leaderSelect() {
 				have, required := 1, s.peers.Quorum()
 				// a 1-node cluster has have == required, len(recipients) == 0
 				for i := 0; i < len(recipients); i++ {
-					err := <-responses
-					if err == ErrDeposed {
+					switch err := <-responses; err {
+					case nil:
+						have++
+					case ErrDeposed:
+						s.logGeneric("during command replication, deposed!")
 						close(deposed)
 						return
-					}
-					if err == nil {
-						have++
+					default:
+						s.logGeneric("during command replication, got error: %s", err)
 					}
 					if have >= required {
 						break
@@ -662,6 +662,9 @@ func (s *Server) leaderSelect() {
 					panic(err)
 				}
 				s.logGeneric("commit of command succeeded")
+				// We can't asynchronously flush: flush may return ErrDeposed,
+				// which requires we abandon our leadership.
+
 				// for _, peer := range s.peers.Except(s.Id) {
 				// 	// Technically, we don't need to send this flush: it will
 				// 	// get replicated on the next heartbeat. We do it here
@@ -693,24 +696,28 @@ func (s *Server) leaderSelect() {
 		case <-heartbeatTick:
 			// Heartbeats attempt to sync the follower log with ours.
 			// That requires per-follower state in the form of nextIndex.
+			// A heartbeat can cause us to be deposed.
 			recipients := s.peers.Except(s.Id)
-			wg := sync.WaitGroup{}
-			wg.Add(len(recipients))
+			responses := make(chan error, len(recipients))
 			for _, peer := range recipients {
 				go func(peer0 Peer) {
-					defer wg.Done()
-					err := s.flushTimeout(peer0, ni, BroadcastInterval())
-					if err != nil {
-						s.logGeneric(
-							"heartbeat: flush to %d: %s (nextIndex now %d)",
-							peer0.Id(),
-							err,
-							ni.PrevLogIndex(peer0.Id()),
-						)
-					}
+					responses <- s.flushTimeout(peer0, ni, BroadcastInterval())
 				}(peer)
 			}
-			wg.Wait()
+			for i := 0; i < cap(responses); i++ {
+				switch err := <-responses; err {
+				case nil:
+					continue
+				case ErrDeposed:
+					s.logGeneric("during heartbeat, deposed!")
+					s.state.Set(Follower)
+					s.leader = unknownLeader
+					return
+				default:
+					s.logGeneric("during heartbeat, got error: %s", err)
+					continue
+				}
+			}
 
 		case t := <-s.appendEntriesChan:
 			resp, stepDown := s.handleAppendEntries(t.Request)
