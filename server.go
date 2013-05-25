@@ -417,7 +417,7 @@ func (s *Server) candidateSelect() {
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("stepping down to Follower (leader=%s)", s.leader)
+				s.logGeneric("stepping down to Follower (leader=%d)", t.Request.LeaderId)
 				s.leader = t.Request.LeaderId
 				s.state.Set(Follower)
 				s.vote = 0
@@ -598,8 +598,12 @@ func (s *Server) leaderSelect() {
 
 			// From here forward, we'll always attempt to replicate the command
 			// to our followers, via the heartbeat mechanism. This timeout is
-			// purely for our present response to the client.
-			timeout := time.After(BroadcastInterval() * 3) // TODO arbitrary
+			// purely for our present response to the client. It must be well
+			// beneath the minimum election timeout, so we don't block too long
+			// in this select-case and trigger a stupid election.
+			//
+			// TODO may need to take this out of the main leaderSelect loop.
+			timeout := time.After(time.Duration(MinimumElectionTimeoutMs/3) * time.Millisecond)
 
 			// Scatter flush requests to all peers
 			recipients := s.peers.Except(s.Id)
