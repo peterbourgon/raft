@@ -315,6 +315,8 @@ func testOrder(t *testing.T, nServers int, values ...int) {
 
 		// done sending
 		log.Printf("testOrder done sending %d command(s) to network", len(cmds))
+		time.Sleep(2 * raft.BroadcastInterval()) // replicate
+		log.Printf("testOrder shutting servers down")
 	}()
 
 	// check the buffers (state machines)

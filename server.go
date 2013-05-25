@@ -327,7 +327,12 @@ func (s *Server) followerSelect() {
 			}
 			if s.leader != t.Request.LeaderId {
 				s.logGeneric("our leader (%d) conflicts with AppendEntries (%d)", s.leader, t.Request.LeaderId)
-				panic("inconsistent leader state in network")
+				t.Response <- AppendEntriesResponse{
+					Term:    s.term,
+					Success: false,
+					reason:  fmt.Sprintf("inconsistent leader (local=%d, RPC=%d)", s.leader, t.Request.LeaderId),
+				}
+				return
 			}
 			resp, stepDown := s.handleAppendEntries(t.Request)
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
@@ -584,6 +589,7 @@ func (s *Server) leaderSelect() {
 
 		case t := <-s.commandChan:
 			// Append the command to our (leader) log
+			s.logGeneric("got command, appending")
 			currentTerm := s.term
 			entry := LogEntry{
 				Index:           s.log.lastIndex() + 1,
@@ -607,6 +613,7 @@ func (s *Server) leaderSelect() {
 
 			// Scatter flush requests to all peers
 			recipients := s.peers.Except(s.Id)
+			s.logGeneric("making %d flush request(s)", len(recipients))
 			responses := make(chan error, len(recipients))
 			for _, peer := range recipients {
 				go func(peer0 Peer) {
@@ -654,15 +661,15 @@ func (s *Server) leaderSelect() {
 				if err := s.log.commitTo(entry.Index); err != nil {
 					panic(err)
 				}
-				for _, peer := range s.peers.Except(s.Id) {
-					// Technically, we don't need to send this flush: it will
-					// get replicated on the next heartbeat. We do it here
-					// purely to get things pushed out faster. So it's OK to
-					// have "fire and forget" semantics.
-					go s.flush(peer, ni)
-				}
+				s.logGeneric("commit of command succeeded")
+				// for _, peer := range s.peers.Except(s.Id) {
+				// 	// Technically, we don't need to send this flush: it will
+				// 	// get replicated on the next heartbeat. We do it here
+				// 	// purely to get things pushed out faster. So it's OK to
+				// 	// have "fire and forget" semantics.
+				// 	go s.flush(peer, ni)
+				// }
 				t.Err <- nil
-				s.logGeneric("replication and commit of command succeeded")
 				continue
 
 			case <-failed:
@@ -671,10 +678,10 @@ func (s *Server) leaderSelect() {
 				continue
 
 			case <-deposed:
+				s.logGeneric("during Command, deposed to Follower (leader unknown)")
 				t.Err <- ErrDeposed
 				s.state.Set(Follower)
 				s.leader = unknownLeader
-				s.logGeneric("during Command, deposed to Follower (leader unknown)")
 				return
 
 			case <-timeout:
