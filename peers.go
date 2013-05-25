@@ -18,7 +18,7 @@ type Peer interface {
 	Id() uint64
 	AppendEntries(AppendEntries) AppendEntriesResponse
 	RequestVote(RequestVote) RequestVoteResponse
-	Command([]byte) error
+	Command([]byte, chan []byte) error
 }
 
 // LocalPeer is the simplest kind of peer, mapped to a server in the
@@ -40,8 +40,8 @@ func (p *LocalPeer) RequestVote(rv RequestVote) RequestVoteResponse {
 	return p.server.RequestVote(rv)
 }
 
-func (p *LocalPeer) Command(cmd []byte) error {
-	return p.server.Command(cmd)
+func (p *LocalPeer) Command(cmd []byte, response chan []byte) error {
+	return p.server.Command(cmd, response)
 }
 
 // requestVoteTimeout issues the RequestVote to the given peer.

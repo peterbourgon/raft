@@ -36,7 +36,6 @@ func TestFollowerToCandidate(t *testing.T) {
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
 	server.SetPeers(raft.MakePeers(nonresponsivePeer(2), nonresponsivePeer(3)))
-	go drainTo(&synchronizedBuffer{}, server.CommandResponses())
 	if server.State() != raft.Follower {
 		t.Fatalf("didn't start as Follower")
 	}
@@ -103,7 +102,6 @@ func TestFailedElection(t *testing.T) {
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
 	server.SetPeers(raft.MakePeers(disapprovingPeer(2), nonresponsivePeer(3)))
-	go drainTo(&synchronizedBuffer{}, server.CommandResponses())
 	server.Start()
 	defer func() { server.Stop(); t.Logf("server stopped") }()
 
@@ -133,7 +131,7 @@ func TestSimpleConsensus(t *testing.T) {
 				return []byte{}, err
 			}
 			atomic.StoreInt32(i, sv.Value)
-			return json.Marshal(map[string]interface{}{"id": id, "ok": true})
+			return json.Marshal(map[string]interface{}{"applied_to_server": id, "applied_value": sv.Value})
 		}
 	}
 
@@ -141,12 +139,18 @@ func TestSimpleConsensus(t *testing.T) {
 	s2 := raft.NewServer(2, &bytes.Buffer{}, applyValue(2, &i2))
 	s3 := raft.NewServer(3, &bytes.Buffer{}, applyValue(3, &i3))
 
+	appendTo := func(dst *synchronizedBuffer) chan []byte {
+		c := make(chan []byte)
+		go func() {
+			for p := range c {
+				dst.Write(p)
+			}
+		}()
+		return c
+	}
 	s1Responses := &synchronizedBuffer{}
-	go drainTo(s1Responses, s1.CommandResponses())
 	s2Responses := &synchronizedBuffer{}
-	go drainTo(s2Responses, s2.CommandResponses())
 	s3Responses := &synchronizedBuffer{}
-	go drainTo(s3Responses, s3.CommandResponses())
 
 	peers := raft.MakePeers(
 		raft.NewLocalPeer(s1),
@@ -172,7 +176,7 @@ func TestSimpleConsensus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s1.Command(cmdBuf); err != nil {
+	if err := s1.Command(cmdBuf, appendTo(s1Responses)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -238,18 +242,23 @@ func testOrder(t *testing.T, nServers int, values ...int) {
 	type recv struct {
 		Recv int `json:"recv"`
 	}
-	do := func(buf []byte) ([]byte, error) {
-		var s send
-		json.Unmarshal(buf, &s)
-		return json.Marshal(recv{Recv: s.Send})
+	do := func(sb *synchronizedBuffer) func(buf []byte) ([]byte, error) {
+		return func(buf []byte) ([]byte, error) {
+			sb.Write(buf)                           // write incoming message
+			var s send                              // decode incoming message
+			json.Unmarshal(buf, &s)                 // ...
+			return json.Marshal(recv{Recv: s.Send}) // write outgoing message
+		}
 	}
 
 	// set up the cluster
-	servers := []*raft.Server{}
-	buffers := []*bytes.Buffer{}
+	servers := []*raft.Server{}        // server components
+	storage := []*bytes.Buffer{}       // persistent log storage
+	buffers := []*synchronizedBuffer{} // the "state machine" for each server
 	for i := 0; i < nServers; i++ {
-		buffers = append(buffers, &bytes.Buffer{})
-		servers = append(servers, raft.NewServer(uint64(i+1), buffers[i], do))
+		buffers = append(buffers, &synchronizedBuffer{})
+		storage = append(storage, &bytes.Buffer{})
+		servers = append(servers, raft.NewServer(uint64(i+1), storage[i], do(buffers[i])))
 	}
 	peers := raft.Peers{}
 	for _, server := range servers {
@@ -259,24 +268,33 @@ func testOrder(t *testing.T, nServers int, values ...int) {
 		server.SetPeers(peers)
 	}
 
-	// record command responses somewhere
-	//began := time.Now()
-	responses := make([]synchronizedBuffer, len(servers))
-	for i, server := range servers {
-		go func(server0 *raft.Server, i0 int) {
-			for buf := range server0.CommandResponses() {
-				//t.Logf("+%-15s %d: recv: %s", time.Since(began), server0.Id, buf)
-				var r recv
-				json.Unmarshal(buf, &r)
-				responses[i0].Write(append([]byte(fmt.Sprint(r.Recv)), ' '))
-			}
-		}(server, i)
-	}
+	/*
+		// record command responses somewhere
+		//began := time.Now()
+		responses := make([]synchronizedBuffer, len(servers))
+		for i, server := range servers {
+			go func(server0 *raft.Server, i0 int) {
+				for buf := range server0.CommandResponses() {
+					//t.Logf("+%-15s %d: recv: %s", time.Since(began), server0.Id, buf)
+					var r recv
+					json.Unmarshal(buf, &r)
+					responses[i0].Write(append([]byte(fmt.Sprint(r.Recv)), ' '))
+				}
+			}(server, i)
+		}
+	*/
 
 	// define cmds
 	cmds := []send{}
 	for _, v := range values {
 		cmds = append(cmds, send{v})
+	}
+
+	// the expected "state-machine" output of applying each command
+	expectedBuffer := &synchronizedBuffer{}
+	for _, cmd := range cmds {
+		buf, _ := json.Marshal(cmd)
+		expectedBuffer.Write(buf)
 	}
 
 	// function-scope this so servers get stopped deterministically
@@ -298,7 +316,7 @@ func testOrder(t *testing.T, nServers int, values ...int) {
 		retry:
 			for {
 				//t.Logf("+%-15s %d: send: %s", time.Since(began), id, buf)
-				switch err := peer.Command(buf); err {
+				switch err := peer.Command(buf, make(chan []byte, 1)); err {
 				case nil:
 					//t.Logf("+%-15s %d: send OK: %s", time.Since(began), id, buf)
 					break retry
@@ -315,16 +333,12 @@ func testOrder(t *testing.T, nServers int, values ...int) {
 		log.Printf("testOrder done sending %d command(s) to network", len(cmds))
 	}()
 
-	// check the command responses
-	expected := []byte{}
-	for _, cmd := range cmds {
-		expected = append(expected, append([]byte(fmt.Sprint(cmd.Send)), ' ')...)
-	}
-	for i := 0; i < len(servers); i++ {
-		got := responses[i].String()
-		t.Logf("%d: %v", i, got)
-		if string(expected) != got {
-			t.Errorf("%d: %s != %s", i, string(expected), got)
+	// check the buffers (state machines)
+	for i, sb := range buffers {
+		expected, got := expectedBuffer.String(), sb.String()
+		t.Logf("%d: state machine: %s", i, got)
+		if expected != got {
+			t.Errorf("server %d: expected '%s', got '%s'", i+1, expected, got)
 		}
 	}
 }
@@ -352,22 +366,16 @@ type synchronizedBuffer struct {
 	buf bytes.Buffer
 }
 
-func (b *synchronizedBuffer) Write(p []byte) {
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
 	b.Lock()
 	defer b.Unlock()
-	b.buf.Write(p)
+	return b.buf.Write(p)
 }
 
 func (b *synchronizedBuffer) String() string {
 	b.RLock()
 	defer b.RUnlock()
 	return b.buf.String()
-}
-
-func drainTo(b *synchronizedBuffer, c <-chan []byte) {
-	for buf := range c {
-		b.Write(buf)
-	}
 }
 
 type nonresponsivePeer uint64
@@ -379,11 +387,8 @@ func (p nonresponsivePeer) AppendEntries(raft.AppendEntries) raft.AppendEntriesR
 func (p nonresponsivePeer) RequestVote(raft.RequestVote) raft.RequestVoteResponse {
 	return raft.RequestVoteResponse{}
 }
-func (p nonresponsivePeer) Command([]byte) error {
+func (p nonresponsivePeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
-}
-func (p nonresponsivePeer) CommandResponses() <-chan []byte {
-	return make(chan []byte)
 }
 
 type approvingPeer uint64
@@ -398,11 +403,8 @@ func (p approvingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteResponse
 		VoteGranted: true,
 	}
 }
-func (p approvingPeer) Command([]byte) error {
+func (p approvingPeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
-}
-func (p approvingPeer) CommandResponses() <-chan []byte {
-	return make(chan []byte)
 }
 
 type disapprovingPeer uint64
@@ -417,9 +419,6 @@ func (p disapprovingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteRespo
 		VoteGranted: false,
 	}
 }
-func (p disapprovingPeer) Command([]byte) error {
+func (p disapprovingPeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
-}
-func (p disapprovingPeer) CommandResponses() <-chan []byte {
-	return make(chan []byte)
 }

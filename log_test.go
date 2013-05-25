@@ -7,10 +7,17 @@ import (
 	"testing"
 )
 
+func oneshot() chan []byte {
+	return make(chan []byte, 1)
+}
+
+func noop([]byte) ([]byte, error) {
+	return []byte{}, nil
+}
+
 func TestLogEntriesAfter(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	log := NewLog(buf, noop)
 	defaultTerm := uint64(5)
 
@@ -36,7 +43,7 @@ func TestLogEntriesAfter(t *testing.T) {
 		}
 	}
 
-	log.appendEntry(LogEntry{1, 1, c})
+	log.appendEntry(LogEntry{1, 1, c, oneshot()})
 	for _, tu := range []tuple{
 		{0, 1, 1},
 		{1, 0, defaultTerm},
@@ -53,7 +60,7 @@ func TestLogEntriesAfter(t *testing.T) {
 		}
 	}
 
-	log.appendEntry(LogEntry{2, 1, c})
+	log.appendEntry(LogEntry{2, 1, c, oneshot()})
 	for _, tu := range []tuple{
 		{0, 2, 1},
 		{1, 1, 1},
@@ -70,7 +77,7 @@ func TestLogEntriesAfter(t *testing.T) {
 		}
 	}
 
-	log.appendEntry(LogEntry{3, 2, c})
+	log.appendEntry(LogEntry{3, 2, c, oneshot()})
 	for _, tu := range []tuple{
 		{0, 3, 2},
 		{1, 2, 2},
@@ -90,12 +97,12 @@ func TestLogEntriesAfter(t *testing.T) {
 
 func TestLogEntryEncodeDecode(t *testing.T) {
 	for _, logEntry := range []LogEntry{
-		LogEntry{1, 1, []byte(`{}`)},
-		LogEntry{1, 2, []byte(`{}`)},
-		LogEntry{1, 2, []byte(`{}`)},
-		LogEntry{2, 2, []byte(`{}`)},
-		LogEntry{255, 3, []byte(`{"cmd": 123}`)},
-		LogEntry{math.MaxUint64 - 1, math.MaxUint64, []byte(`{}`)},
+		LogEntry{1, 1, []byte(`{}`), oneshot()},
+		LogEntry{1, 2, []byte(`{}`), oneshot()},
+		LogEntry{1, 2, []byte(`{}`), oneshot()},
+		LogEntry{2, 2, []byte(`{}`), oneshot()},
+		LogEntry{255, 3, []byte(`{"cmd": 123}`), oneshot()},
+		LogEntry{math.MaxUint64 - 1, math.MaxUint64, []byte(`{}`), oneshot()},
 	} {
 		b := &bytes.Buffer{}
 		if err := logEntry.encode(b); err != nil {
@@ -113,27 +120,25 @@ func TestLogEntryEncodeDecode(t *testing.T) {
 
 func TestLogAppend(t *testing.T) {
 	c := []byte(`{}`)
-	rc := make(chan []byte, 100)
 	buf := &bytes.Buffer{}
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	log := NewLog(buf, noop)
 
 	// Append 3 valid LogEntries
-	if err := log.appendEntry(LogEntry{1, 1, c}); err != nil {
+	if err := log.appendEntry(LogEntry{1, 1, c, oneshot()}); err != nil {
 		t.Errorf("Append: %s", err)
 	}
-	if err := log.appendEntry(LogEntry{2, 1, c}); err != nil {
+	if err := log.appendEntry(LogEntry{2, 1, c, oneshot()}); err != nil {
 		t.Errorf("Append: %s", err)
 	}
-	if err := log.appendEntry(LogEntry{3, 2, c}); err != nil {
+	if err := log.appendEntry(LogEntry{3, 2, c, oneshot()}); err != nil {
 		t.Errorf("Append: %s", err)
 	}
 
 	// Append some invalid LogEntries
-	if err := log.appendEntry(LogEntry{4, 1, c}); err != ErrTermTooSmall {
+	if err := log.appendEntry(LogEntry{4, 1, c, oneshot()}); err != ErrTermTooSmall {
 		t.Errorf("Append: expected ErrTermTooSmall, got %v", err)
 	}
-	if err := log.appendEntry(LogEntry{2, 2, c}); err != ErrIndexTooSmall {
+	if err := log.appendEntry(LogEntry{2, 2, c, oneshot()}); err != ErrIndexTooSmall {
 		t.Errorf("Append: expected ErrIndexTooSmall, got %v", nil)
 	}
 
@@ -144,7 +149,7 @@ func TestLogAppend(t *testing.T) {
 	}
 
 	// Commit the first two, only
-	if err := log.commitTo(2, rc); err != nil {
+	if err := log.commitTo(2); err != nil {
 		t.Errorf("commitTo: %s", err)
 	}
 
@@ -158,15 +163,15 @@ func TestLogAppend(t *testing.T) {
 	}
 
 	// Make some invalid commits
-	if err := log.commitTo(1, rc); err != ErrIndexTooSmall {
+	if err := log.commitTo(1); err != ErrIndexTooSmall {
 		t.Errorf("Commit: expected ErrIndexTooSmall, got %v", err)
 	}
-	if err := log.commitTo(4, rc); err != ErrIndexTooBig {
+	if err := log.commitTo(4); err != ErrIndexTooBig {
 		t.Errorf("Commit: expected ErrIndexTooBig, got %v", err)
 	}
 
 	// Commit every LogEntry
-	if err := log.commitTo(3, rc); err != nil {
+	if err := log.commitTo(3); err != nil {
 		t.Errorf("commitTo: %s", err)
 	}
 
@@ -183,7 +188,6 @@ func TestLogAppend(t *testing.T) {
 func TestLogContains(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	log := NewLog(buf, noop)
 
 	for _, tuple := range []struct {
@@ -194,7 +198,7 @@ func TestLogContains(t *testing.T) {
 		{2, 1},
 		{3, 2},
 	} {
-		e := LogEntry{tuple.Index, tuple.Term, c}
+		e := LogEntry{tuple.Index, tuple.Term, c, oneshot()}
 		if err := log.appendEntry(e); err != nil {
 			t.Fatalf("appendEntry(%v): %s", e, err)
 		}
@@ -227,9 +231,7 @@ func TestLogContains(t *testing.T) {
 
 func TestLogTruncation(t *testing.T) {
 	c := []byte(`{}`)
-	rc := make(chan []byte, 100)
 	buf := &bytes.Buffer{}
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	log := NewLog(buf, noop)
 
 	for _, tuple := range []struct {
@@ -240,13 +242,13 @@ func TestLogTruncation(t *testing.T) {
 		{2, 1},
 		{3, 2},
 	} {
-		e := LogEntry{tuple.Index, tuple.Term, c}
+		e := LogEntry{tuple.Index, tuple.Term, c, oneshot()}
 		if err := log.appendEntry(e); err != nil {
 			t.Fatalf("appendEntry(%v): %s", e, err)
 		}
 	}
 
-	if err := log.commitTo(2, rc); err != nil {
+	if err := log.commitTo(2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -282,7 +284,6 @@ func TestCleanLogRecovery(t *testing.T) {
 	}
 
 	buf := bytes.NewBufferString(strings.Join(lines, "\n") + "\n")
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	log := NewLog(buf, noop)
 
 	if expected, got := len(lines), len(log.entries); expected != got {
@@ -322,7 +323,6 @@ func TestCorruptedLogRecovery(t *testing.T) {
 	}
 
 	buf := bytes.NewBufferString(strings.Join(lines, "\n") + "\n")
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	log := NewLog(buf, noop)
 
 	if expected, got := 1, len(log.entries); expected != got {

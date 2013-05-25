@@ -110,7 +110,6 @@ type Server struct {
 	appendEntriesChan chan appendEntriesTuple
 	requestVoteChan   chan requestVoteTuple
 	commandChan       chan commandTuple
-	responsesChan     chan []byte
 	electionTick      <-chan time.Time
 	quit              chan chan struct{}
 }
@@ -136,7 +135,6 @@ func NewServer(id uint64, store io.ReadWriter, apply func([]byte) ([]byte, error
 		appendEntriesChan: make(chan appendEntriesTuple),
 		requestVoteChan:   make(chan requestVoteTuple),
 		commandChan:       make(chan commandTuple),
-		responsesChan:     make(chan []byte),
 		electionTick:      time.NewTimer(ElectionTimeout()).C, // one-shot
 		quit:              make(chan chan struct{}),
 	}
@@ -169,32 +167,23 @@ func (s *Server) Stop() {
 }
 
 type commandTuple struct {
-	Command []byte
-	Err     chan error
+	Command         []byte
+	CommandResponse chan []byte
+	Err             chan error
 }
 
 // Command appends the passed command to the leader log. If error is nil, the
 // command will eventually get replicated throughout the Raft network. When the
 // command gets committed to the local server log, it's passed to the apply
 // function, and the response from that function is provided on the
-// CommandResponses channel.
+// passed response chan.
 //
 // This is a public method only to facilitate the construction of peers
 // on arbitrary transports.
-func (s *Server) Command(cmd []byte) error {
+func (s *Server) Command(cmd []byte, response chan []byte) error {
 	err := make(chan error)
-	s.commandChan <- commandTuple{cmd, err}
+	s.commandChan <- commandTuple{cmd, response, err}
 	return <-err
-}
-
-// CommandResponses yields a channel that contains ordered responses to every
-// command issued via Command. Clients are obliged to consume every response
-// from this channel in a timely manner.
-//
-// This is a public method only to facilitate the construction of peers
-// on arbitrary transports.
-func (s *Server) CommandResponses() <-chan []byte {
-	return s.responsesChan
 }
 
 // AppendEntries processes the given RPC and returns the response.
@@ -306,7 +295,7 @@ func (s *Server) forwardCommand(t commandTuple) {
 		// We're blocking our {follower,candidate}Select function in the
 		// receive-command branch. If we continue to block while forwarding
 		// the command, the leader won't be able to get a response from us!
-		go func() { t.Err <- leader.Command(t.Command) }()
+		go func() { t.Err <- leader.Command(t.Command, t.CommandResponse) }()
 	}
 }
 
@@ -315,7 +304,6 @@ func (s *Server) followerSelect() {
 		select {
 		case q := <-s.quit:
 			s.running.Set(false)
-			close(s.responsesChan)
 			close(q)
 			return
 
@@ -385,7 +373,6 @@ func (s *Server) candidateSelect() {
 		select {
 		case q := <-s.quit:
 			s.running.Set(false)
-			close(s.responsesChan)
 			close(q)
 			return
 
@@ -592,7 +579,6 @@ func (s *Server) leaderSelect() {
 		select {
 		case q := <-s.quit:
 			s.running.Set(false)
-			close(s.responsesChan)
 			close(q)
 			return
 
@@ -600,9 +586,10 @@ func (s *Server) leaderSelect() {
 			// Append the command to our (leader) log
 			currentTerm := s.term
 			entry := LogEntry{
-				Index:   s.log.lastIndex() + 1,
-				Term:    currentTerm,
-				Command: t.Command,
+				Index:           s.log.lastIndex() + 1,
+				Term:            currentTerm,
+				Command:         t.Command,
+				commandResponse: t.CommandResponse,
 			}
 			if err := s.log.appendEntry(entry); err != nil {
 				t.Err <- err
@@ -660,7 +647,7 @@ func (s *Server) leaderSelect() {
 			select {
 			case <-commit:
 				s.logGeneric("replication of command succeeded; committing")
-				if err := s.log.commitTo(entry.Index, s.responsesChan); err != nil {
+				if err := s.log.commitTo(entry.Index); err != nil {
 					panic(err)
 				}
 				for _, peer := range s.peers.Except(s.Id) {
@@ -862,7 +849,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// Commit up to the commit index
 	if r.CommitIndex > 0 { // TODO perform this check, or let it fail?
-		if err := s.log.commitTo(r.CommitIndex, s.responsesChan); err != nil {
+		if err := s.log.commitTo(r.CommitIndex); err != nil {
 			return AppendEntriesResponse{
 				Term:    s.term,
 				Success: false,
