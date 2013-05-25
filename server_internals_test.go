@@ -68,3 +68,43 @@ func TestLimitedClientPatience(t *testing.T) {
 
 	// the client should not be stuck forever
 }
+
+func TestLenientCommit(t *testing.T) {
+	// a log with lastIndex=5 commitIndex=5
+	log := &Log{
+		entries: []LogEntry{
+			LogEntry{Index: 1, Term: 1},
+			LogEntry{Index: 2, Term: 1},
+			LogEntry{Index: 3, Term: 2},
+			LogEntry{Index: 4, Term: 2},
+			LogEntry{Index: 5, Term: 2},
+		},
+		commitIndex: 5,
+	}
+
+	// belongs to a follower
+	s := Server{
+		id:     100,
+		term:   2,
+		leader: 101,
+		log:    log,
+		state:  &serverState{value: Follower},
+	}
+
+	// a leader attempts to AppendEntries with PrevLogIndex=5 CommitIndex=4
+	resp, stepDown := s.handleAppendEntries(AppendEntries{
+		Term:         2,
+		LeaderId:     101,
+		PrevLogIndex: 5,
+		PrevLogTerm:  2,
+		CommitIndex:  4,
+	})
+
+	// this should not fail
+	if !resp.Success {
+		t.Errorf("failed (%s)", resp.reason)
+	}
+	if stepDown {
+		t.Errorf("shouldn't step down")
+	}
+}

@@ -892,7 +892,16 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	}
 
 	// Commit up to the commit index
-	if r.CommitIndex > 0 { // TODO perform this check, or let it fail?
+	// < ptrb> ongardie: if the new leader sends a 0-entry AppendEntries
+	// with lastIndex=5 commitIndex=4, to a follower that has lastIndex=5
+	// commitIndex=5 -- in my impl, this fails, because commitIndex is too
+	// small. shouldn't be?
+	// <@ongardie> ptrb: i don't think that should fail
+	// <@ongardie> there are 4 ways an AppendEntries request can fail: (1)
+	// network drops packet (2) caller has stale term (3) would leave gap in the
+	// recipient's log (4) term of entry preceding the new entries doesn't match
+	// the term at the same index on the recipient
+	if r.CommitIndex > 0 && r.CommitIndex > s.log.getCommitIndex() {
 		if err := s.log.commitTo(r.CommitIndex); err != nil {
 			return AppendEntriesResponse{
 				Term:    s.term,
