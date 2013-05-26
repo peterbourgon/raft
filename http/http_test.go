@@ -122,8 +122,8 @@ func newMockMux() *mockMux {
 	return &mockMux{registry: map[string]http.HandlerFunc{}}
 }
 
-func (m *mockMux) HandleFunc(path string, handler http.HandlerFunc) {
-	m.registry[path] = handler
+func (m *mockMux) HandleFunc(path string, h func(http.ResponseWriter, *http.Request)) {
+	m.registry[path] = h
 }
 
 func (m *mockMux) Call(path string, r *http.Request) ([]byte, error) {

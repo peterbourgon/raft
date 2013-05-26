@@ -120,7 +120,7 @@ func NewHTTPServer(server raft.Peer) *HTTPServer {
 }
 
 type Muxer interface {
-	HandleFunc(string, http.HandlerFunc)
+	HandleFunc(string, func(http.ResponseWriter, *http.Request))
 }
 
 func (s *HTTPServer) Install(mux Muxer) {
