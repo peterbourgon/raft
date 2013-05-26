@@ -96,9 +96,10 @@ func stripResponseChannels(a []LogEntry) []LogEntry {
 	stripped := make([]LogEntry, len(a))
 	for i, entry := range a {
 		stripped[i] = LogEntry{
-			Index:   entry.Index,
-			Term:    entry.Term,
-			Command: entry.Command,
+			Index:           entry.Index,
+			Term:            entry.Term,
+			Command:         entry.Command,
+			commandResponse: nil,
 		}
 	}
 	return stripped
@@ -138,7 +139,7 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 		return ErrIndexTooSmall
 	}
 
-	if index > uint64(len(l.entries)) {
+	if index > l.lastIndexWithLock() {
 		return ErrIndexTooBig
 	}
 
@@ -146,26 +147,55 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 	// decide we need a complete log rebuild. Of course, that's only valid if we
 	// haven't committed anything, so this check comes after that one.
 	if index == 0 {
+		for i := 0; i < len(l.entries); i++ {
+			if l.entries[i].commandResponse != nil {
+				close(l.entries[i].commandResponse)
+				l.entries[i].commandResponse = nil
+			}
+		}
 		l.entries = []LogEntry{}
 		return nil
 	}
 
-	entry := l.entries[index-1]
-	if entry.Term != term {
-		return ErrBadTerm
+	// Normal case: find the index of the matching log entry.
+	i := 0
+	for ; i < len(l.entries); i++ {
+		if l.entries[i].Index < index {
+			continue // didn't find it yet
+		}
+		if l.entries[i].Index > index {
+			return ErrBadIndex // somehow went past it
+		}
+		if l.entries[i].Index != index {
+			return ErrBadIndex
+		}
+		if l.entries[i].Term != term {
+			return ErrBadTerm
+		}
+		break // good
+	}
+
+	// `i` is the log entry matching index and term.
+	// We want to truncate everything after that.
+	truncateFrom := i + 1
+	if truncateFrom >= len(l.entries) {
+		return nil // nothing to truncate
 	}
 
 	// If we blow away log entries that haven't yet sent responses to clients,
 	// signal the clients to stop waiting, by closing the channel without a
 	// response value.
-	for i := int(index); i < len(l.entries); i++ {
+	for i = truncateFrom; i < len(l.entries); i++ {
 		if l.entries[i].commandResponse != nil {
 			close(l.entries[i].commandResponse)
 			l.entries[i].commandResponse = nil
 		}
 	}
 
-	l.entries = l.entries[:index]
+	// Truncate the log.
+	l.entries = l.entries[:truncateFrom]
+
+	// Done.
 	return nil
 }
 
@@ -253,7 +283,7 @@ func (l *Log) commitTo(commitIndex uint64) error {
 		if l.entries[i].commandResponse != nil {
 			select {
 			case l.entries[i].commandResponse <- resp: // TODO could `go` this
-				break
+				//
 			case <-time.After(BroadcastInterval()): // << ElectionInterval
 				panic("uncoöperative command response receiver")
 			}

@@ -193,7 +193,7 @@ func TestCatchUp(t *testing.T) {
 
 	// the slow follower has timed out, from the leader's perspective
 	// but we wait for it to receive and apply the AppendEntries locally
-	time.Sleep(2 * firstDelay)
+	time.Sleep(3 * firstDelay)
 
 	// the slow follower has applied the entry to its log
 	if f5.log.lastIndex() != 5 {

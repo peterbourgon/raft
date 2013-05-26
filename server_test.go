@@ -133,16 +133,6 @@ func TestSimpleConsensus(t *testing.T) {
 	s2 := raft.NewServer(2, &bytes.Buffer{}, applyValue(2, &i2))
 	s3 := raft.NewServer(3, &bytes.Buffer{}, applyValue(3, &i3))
 
-	appendTo := func(dst *synchronizedBuffer) chan []byte {
-		c := make(chan []byte)
-		go func() {
-			for p := range c {
-				dst.Write(p)
-			}
-		}()
-		return c
-	}
-
 	s1Responses := &synchronizedBuffer{}
 	s2Responses := &synchronizedBuffer{}
 	s3Responses := &synchronizedBuffer{}
@@ -167,36 +157,47 @@ func TestSimpleConsensus(t *testing.T) {
 	defer s2.Stop()
 	defer s3.Stop()
 
-	done := make(chan struct{})
-	go func() {
-		var v int32 = 42
-		cmdBuf, _ := json.Marshal(SetValue{v})
-		for {
-			err := s1.Command(cmdBuf, appendTo(s1Responses))
-			if err == nil {
-				break
-			}
-			time.Sleep(raft.MinimumElectionTimeout())
-		}
+	var v int32 = 42
+	cmd, _ := json.Marshal(SetValue{v})
 
+	response := make(chan []byte, 1)
+	func() {
 		for {
+			switch err := s1.Command(cmd, response); err {
+			case nil:
+				return
+			case raft.ErrUnknownLeader:
+				time.Sleep(raft.MinimumElectionTimeout())
+			default:
+				t.Fatal(err)
+			}
+		}
+	}()
+
+	r, ok := <-response
+	if ok {
+		s1Responses.Write(r)
+	} else {
+		t.Logf("didn't receive command response")
+	}
+
+	ticker := time.Tick(raft.BroadcastInterval())
+	timeout := time.After(1 * time.Second)
+	for {
+		select {
+		case <-ticker:
 			i1l := atomic.LoadInt32(&i1)
 			i2l := atomic.LoadInt32(&i2)
 			i3l := atomic.LoadInt32(&i3)
 			t.Logf("i1=%02d i2=%02d i3=%02d", i1l, i2l, i3l)
 			if i1l == v && i2l == v && i3l == v {
-				close(done)
+				t.Logf("success!")
 				return
 			}
-			time.Sleep(raft.MinimumElectionTimeout())
-		}
-	}()
 
-	select {
-	case <-done:
-		t.Logf("success")
-	case <-time.After(1 * time.Second):
-		t.Errorf("timeout")
+		case <-timeout:
+			t.Fatal("timeout")
+		}
 	}
 }
 
@@ -291,52 +292,47 @@ func testOrder(t *testing.T, nServers int) {
 		expectedBuffer.Write(buf)
 	}
 
-	// function-scope this so servers get stopped deterministically
-	func() {
-		// boot up the cluster
-		for _, server := range servers {
-			server.Start()
-			defer func(server0 *raft.Server) {
-				log.Printf("issuing stop command to server %d", server0.Id())
-				server0.Stop()
-			}(server)
-		}
+	// boot up the cluster
+	for _, server := range servers {
+		server.Start()
+		defer func(server0 *raft.Server) {
+			log.Printf("issuing stop command to server %d", server0.Id())
+			server0.Stop()
+		}(server)
+	}
 
-		// send commands
-		for i, cmd := range cmds {
-			id := uint64(rand.Intn(nServers)) + 1
-			peer := peers[id]
-			buf, _ := json.Marshal(cmd)
-			response := make(chan []byte, 1)
-		retry:
-			for {
-				log.Printf("command=%d/%d peer=%d: sending %s", i+1, len(cmds), id, buf)
-				switch err := peer.Command(buf, response); err {
-				case nil:
-					log.Printf("command=%d/%d peer=%d: OK", i+1, len(cmds), id)
-					break retry
-				case raft.ErrUnknownLeader, raft.ErrDeposed:
-					log.Printf("command=%d/%d peer=%d: failed (%s) -- will retry", i+1, len(cmds), id, err)
-					time.Sleep(raft.ElectionTimeout())
-				case raft.ErrTimeout:
-					log.Printf("command=%d/%d peer=%d: timed out -- we'll assume it went through", i+1, len(cmds), id)
-				default:
-					t.Fatalf("command=%d/%d peer=%d: failed (%s) -- fatal", i+1, len(cmds), id, err)
-				}
+	// send commands
+	for i, cmd := range cmds {
+		id := uint64(rand.Intn(nServers)) + 1
+		peer := peers[id]
+		buf, _ := json.Marshal(cmd)
+		response := make(chan []byte, 1)
+	retry:
+		for {
+			log.Printf("command=%d/%d peer=%d: sending %s", i+1, len(cmds), id, buf)
+			switch err := peer.Command(buf, response); err {
+			case nil:
+				log.Printf("command=%d/%d peer=%d: OK", i+1, len(cmds), id)
+				break retry
+			case raft.ErrUnknownLeader, raft.ErrDeposed:
+				log.Printf("command=%d/%d peer=%d: failed (%s) -- will retry", i+1, len(cmds), id, err)
+				time.Sleep(raft.ElectionTimeout())
+			case raft.ErrTimeout:
+				log.Printf("command=%d/%d peer=%d: timed out -- we'll assume it went through", i+1, len(cmds), id)
+			default:
+				t.Fatalf("command=%d/%d peer=%d: failed (%s) -- fatal", i+1, len(cmds), id, err)
 			}
-			r, ok := <-response
-			if !ok {
-				log.Printf("command=%d/%d peer=%d: truncated, will retry", i+1, len(cmds), id)
-				goto retry
-			}
-			log.Printf("command=%d/%d peer=%d: OK, got response %s", i+1, len(cmds), id, string(r))
 		}
+		r, ok := <-response
+		if !ok {
+			log.Printf("command=%d/%d peer=%d: truncated, will retry", i+1, len(cmds), id)
+			goto retry
+		}
+		log.Printf("command=%d/%d peer=%d: OK, got response %s", i+1, len(cmds), id, string(r))
+	}
 
-		// done sending
-		log.Printf("testOrder done sending %d command(s) to network", len(cmds))
-		time.Sleep(raft.MinimumElectionTimeout())
-		log.Printf("testOrder shutting servers down")
-	}()
+	// done sending
+	log.Printf("testOrder done sending %d command(s) to network", len(cmds))
 
 	// check the buffers (state machines)
 	for i, sb := range buffers {
