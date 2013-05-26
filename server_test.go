@@ -340,10 +340,19 @@ func testOrder(t *testing.T, nServers int) {
 
 	// check the buffers (state machines)
 	for i, sb := range buffers {
-		expected, got := expectedBuffer.String(), sb.String()
-		t.Logf("server %d: state machine: %s", i+1, got)
-		if expected != got {
-			t.Fatalf("server %d: expected \n\t'%s', got \n\t'%s'", i+1, expected, got)
+		for {
+			expected, got := expectedBuffer.String(), sb.String()
+			if len(got) < len(expected) {
+				t.Logf("server %d: not yet fully replicated, will check again", i+1)
+				time.Sleep(raft.BroadcastInterval())
+				continue // retry
+			}
+			if expected != got {
+				t.Errorf("server %d: fully replicated, expected\n\t%s, got\n\t%s", i+1, expected, got)
+				break
+			}
+			t.Logf("server %d: %s OK", i+1, got)
+			break
 		}
 	}
 }
