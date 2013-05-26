@@ -21,17 +21,11 @@ func init() {
 	log.SetFlags(log.Lmicroseconds)
 }
 
-func resetElectionTimeoutMs(newMin, newMax int) (int, int) {
-	oldMin, oldMax := raft.MinimumElectionTimeoutMs, raft.MaximumElectionTimeoutMs
-	raft.MinimumElectionTimeoutMs, raft.MaximumElectionTimeoutMs = newMin, newMax
-	return oldMin, oldMax
-}
-
 func TestFollowerToCandidate(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
-	defer resetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
+	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
@@ -65,8 +59,8 @@ func TestFollowerToCandidate(t *testing.T) {
 func TestCandidateToLeader(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
-	defer resetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
+	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
@@ -96,8 +90,8 @@ func TestCandidateToLeader(t *testing.T) {
 func TestFailedElection(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
-	defer resetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
+	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
@@ -117,8 +111,8 @@ func TestSimpleConsensus(t *testing.T) {
 	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
 	defer printOnFailure(t, logBuffer)
-	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
-	defer resetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
+	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
 	type SetValue struct {
 		Value int32 `json:"value"`
@@ -237,8 +231,8 @@ func testOrderTimeout(t *testing.T, nServers int, timeout time.Duration) {
 	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
 	defer printOnFailure(t, logBuffer)
-	oldMin, oldMax := resetElectionTimeoutMs(50, 100)
-	defer resetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := raft.ResetElectionTimeoutMs(50, 100)
+	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
 	done := make(chan struct{})
 	go func() { testOrder(t, nServers); close(done) }()
@@ -342,7 +336,7 @@ func testOrder(t *testing.T, nServers int) {
 
 		// done sending
 		log.Printf("testOrder done sending %d command(s) to network", len(cmds))
-		time.Sleep(4 * raft.BroadcastInterval()) // time to replicate
+		time.Sleep(raft.MinimumElectionTimeout())
 		log.Printf("testOrder shutting servers down")
 	}()
 

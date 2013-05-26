@@ -44,6 +44,14 @@ func init() {
 	}
 }
 
+// ResetElectionTimeoutMs sets the minimum and maximum election timeouts to the
+// passed values, and returns the old values.
+func ResetElectionTimeoutMs(newMin, newMax int) (int, int) {
+	oldMin, oldMax := MinimumElectionTimeoutMs, MaximumElectionTimeoutMs
+	MinimumElectionTimeoutMs, MaximumElectionTimeoutMs = newMin, newMax
+	return oldMin, oldMax
+}
+
 // MinimumElectionTimeout returns a constant time.Duration, which is the
 // MinimumElectionTimeMs (in milliseconds). This function exists so you can
 // set raft.MinimumElectionTimeMs in your client, and make decisions in your
@@ -554,12 +562,13 @@ func (ni *nextIndex) Set(id, index uint64) {
 // manages that state.
 //
 // flush is synchronous and can block forever if the peer is nonresponsive.
-func (s *Server) flush(peer Peer, ni *nextIndex) error {
+func (s *Server) flush(peer Peer, ni *nextIndex, cancel chan struct{}) error {
 	peerId := peer.Id()
 	currentTerm := s.term
 	prevLogIndex := ni.PrevLogIndex(peerId)
 	entries, prevLogTerm := s.log.entriesAfter(prevLogIndex)
 	commitIndex := s.log.getCommitIndex()
+	s.logGeneric("flush: to %d: term=%d leaderId=%d prevLogIndex/Term=%d/%d sz=%d commitIndex=%d", peerId, currentTerm, s.id, prevLogIndex, prevLogTerm, len(entries), commitIndex)
 	resp := peer.AppendEntries(AppendEntries{
 		Term:         currentTerm,
 		LeaderId:     s.id,
@@ -568,21 +577,38 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 		Entries:      entries,
 		CommitIndex:  commitIndex,
 	})
+
+	select {
+	case <-cancel:
+		s.logGeneric("flush: to %d: canceled (due to timeout), ignoring response", peerId)
+		return ErrTimeout // nobody listening anyway
+	default:
+		break
+	}
+
 	if resp.Term > currentTerm {
+		s.logGeneric("flush: to %d: responseTerm=%d > currentTerm=%d: deposed", peerId, resp.Term, currentTerm)
 		return ErrDeposed
 	}
 	if !resp.Success {
 		ni.Decrement(peerId)
+		s.logGeneric("flush: to %d: rejected; prevLogIndex(%d) becomes %d", peerId, peerId, ni.PrevLogIndex(peerId))
 		return ErrAppendEntriesRejected
 	}
 
 	if len(entries) > 0 {
 		ni.Set(peer.Id(), entries[len(entries)-1].Index)
+		s.logGeneric("flush: to %d: accepted; prevLogIndex(%d) becomes %d", peerId, peerId, ni.PrevLogIndex(peerId))
+		return nil
 	}
+
+	s.logGeneric("flush: to %d: accepted; prevLogIndex(%d) remains %d", peerId, peerId, ni.PrevLogIndex(peerId))
 	return nil
 }
 
-func (s *Server) concurrentFlush(peers Peers, ni *nextIndex) (int, bool) {
+// concurrentFlush triggers a concurrent flush to each of the peers.
+// timeout is per-Peer.
+func (s *Server) concurrentFlush(peers Peers, ni *nextIndex, timeout time.Duration) (int, bool) {
 	type tuple struct {
 		id  uint64
 		err error
@@ -591,8 +617,9 @@ func (s *Server) concurrentFlush(peers Peers, ni *nextIndex) (int, bool) {
 	for _, peer := range peers {
 		go func(peer0 Peer) {
 			err0 := make(chan error, 1)
-			go func() { err0 <- s.flush(peer0, ni) }()
-			go func() { time.Sleep(2 * BroadcastInterval()); err0 <- ErrTimeout }()
+			cancel := make(chan struct{})
+			go func() { err0 <- s.flush(peer0, ni, cancel) }()
+			go func() { time.Sleep(timeout); close(cancel); err0 <- ErrTimeout }()
 			responses <- tuple{peer0.Id(), <-err0}
 		}(peer)
 	}
@@ -601,13 +628,13 @@ func (s *Server) concurrentFlush(peers Peers, ni *nextIndex) (int, bool) {
 	for i := 0; i < cap(responses); i++ {
 		switch t := <-responses; t.err {
 		case nil:
-			s.logGeneric("concurrentFlush: peer %d: OK", t.id)
+			s.logGeneric("concurrentFlush: peer %d: OK (prevLogIndex(%d)=%d)", t.id, t.id, ni.PrevLogIndex(t.id))
 			successes++
 		case ErrDeposed:
 			s.logGeneric("concurrentFlush: peer %d: deposed!", t.id)
 			stepDown = true
 		default:
-			s.logGeneric("concurrentFlush: peer %d: %s", t.id, t.err)
+			s.logGeneric("concurrentFlush: peer %d: %s (prevLogIndex(%d)=%d)", t.id, t.err, t.id, ni.PrevLogIndex(t.id))
 			// nothing to do but log and continue
 		}
 	}
@@ -693,7 +720,7 @@ func (s *Server) leaderSelect() {
 			}
 
 			// Normal case: network of at-least-2
-			successes, stepDown := s.concurrentFlush(recipients, ni)
+			successes, stepDown := s.concurrentFlush(recipients, ni, 2*BroadcastInterval())
 			if stepDown {
 				s.logGeneric("deposed during flush")
 				s.state.Set(Follower)
