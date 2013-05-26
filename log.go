@@ -158,10 +158,10 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 	// If we blow away log entries that haven't yet sent responses to clients,
 	// signal the clients to stop waiting, by closing the channel without a
 	// response value.
-	for _, deletedEntry := range l.entries[index:] {
-		if deletedEntry.commandResponse != nil {
-			close(deletedEntry.commandResponse)
-			deletedEntry.commandResponse = nil
+	for i := int(index); i < len(l.entries); i++ {
+		if l.entries[i].commandResponse != nil {
+			close(l.entries[i].commandResponse)
+			l.entries[i].commandResponse = nil
 		}
 	}
 
@@ -243,25 +243,24 @@ func (l *Log) commitTo(commitIndex uint64) error {
 
 	// Sync entries between our commit index and the passed commit index
 	for i := l.commitIndex; i < commitIndex; i++ {
-		entry := l.entries[i]
-		if err := entry.encode(l.store); err != nil {
+		if err := l.entries[i].encode(l.store); err != nil {
 			return err
 		}
-		resp, err := l.apply(entry.Command)
+		resp, err := l.apply(l.entries[i].Command)
 		if err != nil {
 			return err
 		}
-		if entry.commandResponse != nil {
+		if l.entries[i].commandResponse != nil {
 			select {
-			case entry.commandResponse <- resp: // TODO might could `go` this
+			case l.entries[i].commandResponse <- resp: // TODO could `go` this
 				break
 			case <-time.After(BroadcastInterval()): // << ElectionInterval
 				panic("uncoöperative command response receiver")
 			}
-			close(entry.commandResponse)
-			entry.commandResponse = nil
+			close(l.entries[i].commandResponse)
+			l.entries[i].commandResponse = nil
 		}
-		l.commitIndex = entry.Index
+		l.commitIndex = l.entries[i].Index
 	}
 
 	return nil
