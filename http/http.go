@@ -8,6 +8,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"strconv"
 )
 
 const (
@@ -43,9 +44,16 @@ func NewHTTPPeer(u url.URL) (*HTTPPeer, error) {
 	}
 	defer resp.Body.Close()
 
-	var id uint64
-	if err := json.NewDecoder(resp.Body).Decode(&id); err != nil {
+	buf, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
 		return nil, err
+	}
+	id, err := strconv.ParseUint(string(buf), 10, 64)
+	if err != nil {
+		return nil, err
+	}
+	if id <= 0 {
+		return nil, fmt.Errorf("invalid peer ID %d", id)
 	}
 
 	return &HTTPPeer{
@@ -102,10 +110,10 @@ func (p *HTTPPeer) rpc(request interface{}, path string, response interface{}) e
 }
 
 type HTTPServer struct {
-	server *raft.Server
+	server raft.Peer
 }
 
-func NewHTTPServer(server *raft.Server) *HTTPServer {
+func NewHTTPServer(server raft.Peer) *HTTPServer {
 	return &HTTPServer{
 		server: server,
 	}
