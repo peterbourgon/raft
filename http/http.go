@@ -28,12 +28,12 @@ func init() {
 	json.NewEncoder(&emptyRequestVoteResponse).Encode(raft.RequestVoteResponse{})
 }
 
-type HTTPPeer struct {
+type Peer struct {
 	id  uint64
 	url url.URL
 }
 
-func NewHTTPPeer(u url.URL) (*HTTPPeer, error) {
+func NewPeer(u url.URL) (*Peer, error) {
 	u.Path = ""
 
 	idUrl := u
@@ -56,27 +56,27 @@ func NewHTTPPeer(u url.URL) (*HTTPPeer, error) {
 		return nil, fmt.Errorf("invalid peer ID %d", id)
 	}
 
-	return &HTTPPeer{
+	return &Peer{
 		id:  id,
 		url: u,
 	}, nil
 }
 
-func (p *HTTPPeer) Id() uint64 { return p.id }
+func (p *Peer) Id() uint64 { return p.id }
 
-func (p *HTTPPeer) AppendEntries(ae raft.AppendEntries) raft.AppendEntriesResponse {
+func (p *Peer) AppendEntries(ae raft.AppendEntries) raft.AppendEntriesResponse {
 	var aer raft.AppendEntriesResponse
 	p.rpc(ae, AppendEntriesPath, &aer)
 	return aer
 }
 
-func (p *HTTPPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteResponse {
+func (p *Peer) RequestVote(rv raft.RequestVote) raft.RequestVoteResponse {
 	var rvr raft.RequestVoteResponse
 	p.rpc(rv, RequestVotePath, &rvr)
 	return rvr
 }
 
-func (p *HTTPPeer) Command(cmd []byte, response chan []byte) error {
+func (p *Peer) Command(cmd []byte, response chan []byte) error {
 	go func() {
 		var responseBuf bytes.Buffer
 		p.rpc(cmd, CommandPath, &responseBuf)
@@ -85,7 +85,7 @@ func (p *HTTPPeer) Command(cmd []byte, response chan []byte) error {
 	return nil // TODO could make this smarter (i.e. timeout), with more work
 }
 
-func (p *HTTPPeer) rpc(request interface{}, path string, response interface{}) error {
+func (p *Peer) rpc(request interface{}, path string, response interface{}) error {
 	body := &bytes.Buffer{}
 	if err := json.NewEncoder(body).Encode(request); err != nil {
 		return err
@@ -109,12 +109,12 @@ func (p *HTTPPeer) rpc(request interface{}, path string, response interface{}) e
 	return nil
 }
 
-type HTTPServer struct {
+type Server struct {
 	server raft.Peer
 }
 
-func NewHTTPServer(server raft.Peer) *HTTPServer {
-	return &HTTPServer{
+func NewServer(server raft.Peer) *Server {
+	return &Server{
 		server: server,
 	}
 }
@@ -123,20 +123,20 @@ type Muxer interface {
 	HandleFunc(string, func(http.ResponseWriter, *http.Request))
 }
 
-func (s *HTTPServer) Install(mux Muxer) {
+func (s *Server) Install(mux Muxer) {
 	mux.HandleFunc(IdPath, s.idHandler())
 	mux.HandleFunc(AppendEntriesPath, s.appendEntriesHandler())
 	mux.HandleFunc(RequestVotePath, s.requestVoteHandler())
 	mux.HandleFunc(CommandPath, s.commandHandler())
 }
 
-func (s *HTTPServer) idHandler() http.HandlerFunc {
+func (s *Server) idHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fmt.Sprint(s.server.Id())))
 	}
 }
 
-func (s *HTTPServer) appendEntriesHandler() http.HandlerFunc {
+func (s *Server) appendEntriesHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		var ae raft.AppendEntries
@@ -153,7 +153,7 @@ func (s *HTTPServer) appendEntriesHandler() http.HandlerFunc {
 	}
 }
 
-func (s *HTTPServer) requestVoteHandler() http.HandlerFunc {
+func (s *Server) requestVoteHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 		var rv raft.RequestVote
@@ -170,7 +170,7 @@ func (s *HTTPServer) requestVoteHandler() http.HandlerFunc {
 	}
 }
 
-func (s *HTTPServer) commandHandler() http.HandlerFunc {
+func (s *Server) commandHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 

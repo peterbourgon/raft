@@ -14,7 +14,7 @@ import (
 
 func TestId(t *testing.T) {
 	id := uint64(33)
-	s := rafthttp.NewHTTPServer(&echoServer{
+	s := rafthttp.NewServer(&echoServer{
 		id:  id,
 		aer: raft.AppendEntriesResponse{},
 		rvr: raft.RequestVoteResponse{}},
@@ -38,7 +38,7 @@ func TestId(t *testing.T) {
 }
 
 func TestCommand(t *testing.T) {
-	s := rafthttp.NewHTTPServer(&echoServer{
+	s := rafthttp.NewServer(&echoServer{
 		id:  1,
 		aer: raft.AppendEntriesResponse{},
 		rvr: raft.RequestVoteResponse{}},
@@ -63,7 +63,7 @@ func TestAppendEntries(t *testing.T) {
 		Term:    3,
 		Success: true,
 	}
-	s := rafthttp.NewHTTPServer(&echoServer{
+	s := rafthttp.NewServer(&echoServer{
 		id:  1,
 		aer: aer,
 		rvr: raft.RequestVoteResponse{},
@@ -91,7 +91,7 @@ func TestRequestVote(t *testing.T) {
 		Term:        5,
 		VoteGranted: true,
 	}
-	s := rafthttp.NewHTTPServer(&echoServer{
+	s := rafthttp.NewServer(&echoServer{
 		id:  1,
 		aer: raft.AppendEntriesResponse{},
 		rvr: rvr,

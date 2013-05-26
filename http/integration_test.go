@@ -35,7 +35,7 @@ func testServers(t *testing.T, n int) {
 	// node = Raft protocol server + a HTTP server + a transport bridge
 	raftServers := make([]*raft.Server, n)
 	httpServers := make([]*http.Server, n)
-	raftHttpServers := make([]*rafthttp.HTTPServer, n)
+	raftHttpServers := make([]*rafthttp.Server, n)
 
 	// create them individually
 	for i := 0; i < n; i++ {
@@ -43,7 +43,7 @@ func testServers(t *testing.T, n int) {
 		raftServers[i] = raft.NewServer(uint64(i+1), &bytes.Buffer{}, noop)
 
 		// wrap that server in a HTTP transport
-		raftHttpServers[i] = rafthttp.NewHTTPServer(raftServers[i])
+		raftHttpServers[i] = rafthttp.NewServer(raftServers[i])
 
 		// connect that HTTP transport to a unique HTTP server
 		mux := http.NewServeMux()
@@ -66,7 +66,7 @@ func testServers(t *testing.T, n int) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		peer, err := rafthttp.NewHTTPPeer(*u)
+		peer, err := rafthttp.NewPeer(*u)
 		if err != nil {
 			t.Fatal(err)
 		}
