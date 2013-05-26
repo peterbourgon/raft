@@ -161,6 +161,7 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 	for _, deletedEntry := range l.entries[index:] {
 		if deletedEntry.commandResponse != nil {
 			close(deletedEntry.commandResponse)
+			deletedEntry.commandResponse = nil
 		}
 	}
 
@@ -251,10 +252,13 @@ func (l *Log) commitTo(commitIndex uint64) error {
 			return err
 		}
 		if entry.commandResponse != nil {
-			select {
-			case entry.commandResponse <- resp: // TODO might could `go` this
+			defer func() {
 				close(entry.commandResponse)
 				entry.commandResponse = nil
+			}()
+			select {
+			case entry.commandResponse <- resp: // TODO might could `go` this
+				break
 			case <-time.After(BroadcastInterval()): // << ElectionInterval
 				panic("uncoöperative command response receiver")
 			}
