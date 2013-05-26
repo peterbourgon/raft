@@ -252,16 +252,14 @@ func (l *Log) commitTo(commitIndex uint64) error {
 			return err
 		}
 		if entry.commandResponse != nil {
-			defer func() {
-				close(entry.commandResponse)
-				entry.commandResponse = nil
-			}()
 			select {
 			case entry.commandResponse <- resp: // TODO might could `go` this
 				break
 			case <-time.After(BroadcastInterval()): // << ElectionInterval
 				panic("uncoöperative command response receiver")
 			}
+			close(entry.commandResponse)
+			entry.commandResponse = nil
 		}
 		l.commitIndex = entry.Index
 	}
