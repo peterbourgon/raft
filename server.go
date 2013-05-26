@@ -356,7 +356,10 @@ func (s *Server) followerSelect() {
 			t.Response <- resp
 			if stepDown {
 				// stepDown as a Follower means just to reset the leader
-				s.logGeneric("abandoned our leader (new leader=%d)", t.Request.LeaderId)
+				if s.leader != unknownLeader {
+					s.logGeneric("abandoning old leader=%d", s.leader)
+				}
+				s.logGeneric("following new leader=%d", t.Request.LeaderId)
 				s.leader = t.Request.LeaderId
 			}
 
@@ -366,7 +369,10 @@ func (s *Server) followerSelect() {
 			t.Response <- resp
 			if stepDown {
 				// stepDown as a Follower means just to reset the leader
-				s.logGeneric("abandoned our leader (new leader unknown)")
+				if s.leader != unknownLeader {
+					s.logGeneric("abandoning old leader=%d", s.leader)
+				}
+				s.logGeneric("new leader unknown")
 				s.leader = unknownLeader
 			}
 		}
