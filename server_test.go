@@ -37,10 +37,9 @@ func TestFollowerToCandidate(t *testing.T) {
 	server.Start()
 	defer func() { server.Stop(); t.Logf("server stopped") }()
 
-	minimum := time.Duration(raft.MaximumElectionTimeoutMs) * time.Millisecond
-	time.Sleep(minimum)
+	time.Sleep(raft.MaximumElectionTimeout())
 
-	cutoff := time.Now().Add(2 * minimum)
+	cutoff := time.Now().Add(2 * raft.MinimumElectionTimeout())
 	backoff := raft.BroadcastInterval()
 	for {
 		if time.Now().After(cutoff) {
@@ -68,10 +67,9 @@ func TestCandidateToLeader(t *testing.T) {
 	server.Start()
 	defer func() { server.Stop(); t.Logf("server stopped") }()
 
-	minimum := time.Duration(raft.MaximumElectionTimeoutMs) * time.Millisecond
-	time.Sleep(minimum)
+	time.Sleep(raft.MaximumElectionTimeout())
 
-	cutoff := time.Now().Add(2 * minimum)
+	cutoff := time.Now().Add(2 * raft.MaximumElectionTimeout())
 	backoff := raft.BroadcastInterval()
 	for {
 		if time.Now().After(cutoff) {

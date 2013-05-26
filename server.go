@@ -8,6 +8,7 @@ import (
 	"math"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,11 +20,12 @@ const (
 
 const (
 	unknownLeader = 0
+	noVote        = 0
 )
 
 var (
-	MinimumElectionTimeoutMs = 250
-	MaximumElectionTimeoutMs = 2 * MinimumElectionTimeoutMs
+	minimumElectionTimeoutMs int32 = 250
+	maximumElectionTimeoutMs       = 2 * minimumElectionTimeoutMs
 )
 
 var (
@@ -34,22 +36,14 @@ var (
 	ErrReplicationFailed     = errors.New("command replication failed (but will keep retrying)")
 )
 
-func init() {
-	if MaximumElectionTimeoutMs <= MinimumElectionTimeoutMs {
-		panic(fmt.Sprintf(
-			"MaximumElectionTimeoutMs (%d) must be > MinimumElectionTimeoutMs (%d)",
-			MaximumElectionTimeoutMs,
-			MinimumElectionTimeoutMs,
-		))
-	}
-}
-
 // ResetElectionTimeoutMs sets the minimum and maximum election timeouts to the
 // passed values, and returns the old values.
 func ResetElectionTimeoutMs(newMin, newMax int) (int, int) {
-	oldMin, oldMax := MinimumElectionTimeoutMs, MaximumElectionTimeoutMs
-	MinimumElectionTimeoutMs, MaximumElectionTimeoutMs = newMin, newMax
-	return oldMin, oldMax
+	oldMin := atomic.LoadInt32(&minimumElectionTimeoutMs)
+	oldMax := atomic.LoadInt32(&maximumElectionTimeoutMs)
+	atomic.StoreInt32(&minimumElectionTimeoutMs, int32(newMin))
+	atomic.StoreInt32(&maximumElectionTimeoutMs, int32(newMax))
+	return int(oldMin), int(oldMax)
 }
 
 // MinimumElectionTimeout returns a constant time.Duration, which is the
@@ -57,22 +51,30 @@ func ResetElectionTimeoutMs(newMin, newMax int) (int, int) {
 // set raft.MinimumElectionTimeMs in your client, and make decisions in your
 // code path without having to explicitly convert.
 func MinimumElectionTimeout() time.Duration {
-	return time.Duration(MinimumElectionTimeoutMs) * time.Millisecond
+	return time.Duration(minimumElectionTimeoutMs) * time.Millisecond
+}
+
+// MaximumElectionTimeout returns a constant time.Duration, which is the
+// MaximumElectionTimeMs (in milliseconds). This function exists so you can
+// set raft.MaximumElectionTimeMs in your client, and make decisions in your
+// code path without having to explicitly convert.
+func MaximumElectionTimeout() time.Duration {
+	return time.Duration(maximumElectionTimeoutMs) * time.Millisecond
 }
 
 // ElectionTimeout returns a variable time.Duration, between
-// MinimumElectionTimeoutMs and twice that value.
+// minimumElectionTimeoutMs and twice that value.
 func ElectionTimeout() time.Duration {
-	n := rand.Intn(MaximumElectionTimeoutMs - MinimumElectionTimeoutMs)
-	d := MinimumElectionTimeoutMs + n
+	n := rand.Intn(int(maximumElectionTimeoutMs - minimumElectionTimeoutMs))
+	d := int(minimumElectionTimeoutMs) + n
 	return time.Duration(d) * time.Millisecond
 }
 
 // BroadcastInterval returns the interval between heartbeats (AppendEntry RPCs)
-// broadcast from the leader. It is MinimumElectionTimeoutMs / 10, as dictated
+// broadcast from the leader. It is minimumElectionTimeoutMs / 10, as dictated
 // by the spec: BroadcastInterval << ElectionTimeout << MTBF.
 func BroadcastInterval() time.Duration {
-	d := MinimumElectionTimeoutMs / 10
+	d := minimumElectionTimeoutMs / 10
 	return time.Duration(d) * time.Millisecond
 }
 
@@ -338,7 +340,7 @@ func (s *Server) followerSelect() {
 			// transitions to candidate state."
 			s.logGeneric("election timeout, becoming candidate")
 			s.term++
-			s.vote = 0
+			s.vote = noVote
 			s.leader = unknownLeader
 			s.state.Set(Candidate)
 			s.resetElectionTimeout()
@@ -400,7 +402,7 @@ func (s *Server) candidateSelect() {
 		s.logGeneric("%d-node cluster; I win", s.peers.Count())
 		s.leader = s.id
 		s.state.Set(Leader)
-		s.vote = 0
+		s.vote = noVote
 		return
 	}
 
@@ -426,7 +428,7 @@ func (s *Server) candidateSelect() {
 				s.logGeneric("got future term (%d>%d); abandoning election", r.Term, s.term)
 				s.leader = unknownLeader
 				s.state.Set(Follower)
-				s.vote = 0
+				s.vote = noVote
 				return // lose
 			}
 			if r.Term < s.term {
@@ -441,7 +443,7 @@ func (s *Server) candidateSelect() {
 				s.logGeneric("%d >= %d: win", votesReceived, votesRequired)
 				s.leader = s.id
 				s.state.Set(Leader)
-				s.vote = 0
+				s.vote = noVote
 				return // win
 			}
 
@@ -484,7 +486,7 @@ func (s *Server) candidateSelect() {
 			s.logGeneric("election ended with no winner; incrementing term and trying again")
 			s.resetElectionTimeout()
 			s.term++
-			s.vote = 0
+			s.vote = noVote
 			return // draw
 		}
 	}
@@ -797,7 +799,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	if rv.Term > s.term {
 		s.logGeneric("RequestVote from newer term (%d): we defer", rv.Term)
 		s.term = rv.Term
-		s.vote = 0
+		s.vote = noVote
 		s.leader = unknownLeader
 		stepDown = true
 	}
@@ -870,7 +872,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	stepDown := false
 	if r.Term > s.term {
 		s.term = r.Term
-		s.vote = 0
+		s.vote = noVote
 		stepDown = true
 	}
 
@@ -881,7 +883,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	// legitimate and steps down, meaning that it returns to follower state."
 	if s.State() == Candidate && r.LeaderId != s.leader && r.Term >= s.term {
 		s.term = r.Term
-		s.vote = 0
+		s.vote = noVote
 		stepDown = true
 	}
 
