@@ -328,6 +328,7 @@ func testOrder(t *testing.T, nServers int) {
 		r, ok := <-response
 		if !ok {
 			log.Printf("command=%d/%d peer=%d: truncated, will retry", i+1, len(cmds), id)
+			response = make(chan []byte, 1) // channel was closed, must re-make
 			goto retry
 		}
 		log.Printf("command=%d/%d peer=%d: OK, got response %s", i+1, len(cmds), id, string(r))
