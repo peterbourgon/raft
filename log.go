@@ -23,18 +23,18 @@ var (
 
 type Log struct {
 	sync.RWMutex
-	store       io.Writer
-	entries     []LogEntry
-	commitIndex uint64
-	apply       func([]byte) ([]byte, error)
+	store     io.Writer
+	entries   []LogEntry
+	commitPos int
+	apply     func([]byte) ([]byte, error)
 }
 
 func NewLog(store io.ReadWriter, apply func([]byte) ([]byte, error)) *Log {
 	l := &Log{
-		store:       store,
-		entries:     []LogEntry{},
-		commitIndex: 0,
-		apply:       apply,
+		store:     store,
+		entries:   []LogEntry{},
+		commitPos: -1, // no commits to begin with
+		apply:     apply,
 	}
 	l.recover(store)
 	return l
@@ -75,16 +75,16 @@ func (l *Log) entriesAfter(index uint64) ([]LogEntry, uint64) {
 	l.RLock()
 	defer l.RUnlock()
 
-	i := 0
+	pos := 0
 	lastTerm := uint64(0)
-	for ; i < len(l.entries); i++ {
-		if l.entries[i].Index > index {
+	for ; pos < len(l.entries); pos++ {
+		if l.entries[pos].Index > index {
 			break
 		}
-		lastTerm = l.entries[i].Term
+		lastTerm = l.entries[pos].Term
 	}
 
-	a := l.entries[i:]
+	a := l.entries[pos:]
 	if len(a) == 0 {
 		return []LogEntry{}, lastTerm
 	}
@@ -135,7 +135,7 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 
 	// Taken loosely from benbjohnson's impl
 
-	if index < l.commitIndex {
+	if index < l.getCommitIndexWithLock() {
 		return ErrIndexTooSmall
 	}
 
@@ -147,37 +147,42 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 	// decide we need a complete log rebuild. Of course, that's only valid if we
 	// haven't committed anything, so this check comes after that one.
 	if index == 0 {
-		for i := 0; i < len(l.entries); i++ {
-			if l.entries[i].commandResponse != nil {
-				close(l.entries[i].commandResponse)
-				l.entries[i].commandResponse = nil
+		for pos := 0; pos < len(l.entries); pos++ {
+			if l.entries[pos].commandResponse != nil {
+				close(l.entries[pos].commandResponse)
+				l.entries[pos].commandResponse = nil
 			}
 		}
 		l.entries = []LogEntry{}
 		return nil
 	}
 
-	// Normal case: find the index of the matching log entry.
-	i := 0
-	for ; i < len(l.entries); i++ {
-		if l.entries[i].Index < index {
+	// Normal case: find the position of the matching log entry.
+	pos := 0
+	for ; pos < len(l.entries); pos++ {
+		if l.entries[pos].Index < index {
 			continue // didn't find it yet
 		}
-		if l.entries[i].Index > index {
+		if l.entries[pos].Index > index {
 			return ErrBadIndex // somehow went past it
 		}
-		if l.entries[i].Index != index {
-			return ErrBadIndex
+		if l.entries[pos].Index != index {
+			panic("not <, not >, but somehow !=")
 		}
-		if l.entries[i].Term != term {
+		if l.entries[pos].Term != term {
 			return ErrBadTerm
 		}
 		break // good
 	}
 
-	// `i` is the log entry matching index and term.
+	// Sanity check.
+	if pos < l.commitPos {
+		panic("index >= commitIndex, but pos < commitPos")
+	}
+
+	// `pos` is the position of log entry matching index and term.
 	// We want to truncate everything after that.
-	truncateFrom := i + 1
+	truncateFrom := pos + 1
 	if truncateFrom >= len(l.entries) {
 		return nil // nothing to truncate
 	}
@@ -185,10 +190,10 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 	// If we blow away log entries that haven't yet sent responses to clients,
 	// signal the clients to stop waiting, by closing the channel without a
 	// response value.
-	for i = truncateFrom; i < len(l.entries); i++ {
-		if l.entries[i].commandResponse != nil {
-			close(l.entries[i].commandResponse)
-			l.entries[i].commandResponse = nil
+	for pos = truncateFrom; pos < len(l.entries); pos++ {
+		if l.entries[pos].commandResponse != nil {
+			close(l.entries[pos].commandResponse)
+			l.entries[pos].commandResponse = nil
 		}
 	}
 
@@ -204,7 +209,17 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 func (l *Log) getCommitIndex() uint64 {
 	l.RLock()
 	defer l.RUnlock()
-	return l.commitIndex
+	return l.getCommitIndexWithLock()
+}
+
+func (l *Log) getCommitIndexWithLock() uint64 {
+	if l.commitPos < 0 {
+		return 0
+	}
+	if l.commitPos >= len(l.entries) {
+		panic(fmt.Sprintf("commitPos %d > len(l.entries) %d; bad bookkeeping in Log", l.commitPos, len(l.entries)))
+	}
+	return l.entries[l.commitPos].Index
 }
 
 // lastIndex returns the index of the most recent log entry.
@@ -235,17 +250,20 @@ func (l *Log) lastTermWithLock() uint64 {
 	return l.entries[len(l.entries)-1].Term
 }
 
-// appendEntry appends the passed log entry to the log.
-// It will return an error if any condition is violated.
+// appendEntry appends the passed log entry to the log. It will return an error
+// if the entry's term is smaller than the log's most recent term, or if the
+// entry's index is too small relative to the log's most recent entry.
 func (l *Log) appendEntry(entry LogEntry) error {
 	l.Lock()
 	defer l.Unlock()
+
 	if len(l.entries) > 0 {
 		lastTerm := l.lastTermWithLock()
 		if entry.Term < lastTerm {
 			return ErrTermTooSmall
 		}
-		if entry.Term == lastTerm && entry.Index <= l.lastIndexWithLock() {
+		lastIndex := l.lastIndexWithLock()
+		if entry.Term == lastTerm && entry.Index <= lastIndex {
 			return ErrIndexTooSmall
 		}
 	}
@@ -254,45 +272,88 @@ func (l *Log) appendEntry(entry LogEntry) error {
 	return nil
 }
 
-// commitTo commits all log entries up to the passed commitIndex. Commit means:
-// synchronize the log entry to persistent storage, and call the state machine
-// execute function for the log entry's command.
+// commitTo commits all log entries up to and including the passed commitIndex.
+// Commit means: synchronize the log entry to persistent storage, and call the
+// state machine apply function for the log entry's command.
 func (l *Log) commitTo(commitIndex uint64) error {
+	if commitIndex == 0 {
+		panic("commitTo(0)")
+	}
+
 	l.Lock()
 	defer l.Unlock()
 
 	// Reject old commit indexes
-	if commitIndex < l.commitIndex {
+	if commitIndex < l.getCommitIndexWithLock() {
 		return ErrIndexTooSmall
 	}
 
 	// Reject new commit indexes
-	if commitIndex > uint64(len(l.entries)) {
+	if commitIndex > l.lastIndexWithLock() {
 		return ErrIndexTooBig
 	}
 
-	// Sync entries between our commit index and the passed commit index
-	for i := l.commitIndex; i < commitIndex; i++ {
-		if err := l.entries[i].encode(l.store); err != nil {
+	// If we've already committed to the commitIndex, great!
+	if commitIndex == l.getCommitIndexWithLock() {
+		return nil
+	}
+
+	// We should start committing at precisely the last commitPos + 1
+	pos := l.commitPos + 1
+	if pos < 0 {
+		panic("pending commit pos < 0")
+	}
+
+	// Commit entries between our existing commit index and the passed index.
+	// Remember to include the passed index.
+	for {
+		// Sanity checks. TODO replace with plain `for` when this is stable.
+		if pos >= len(l.entries) {
+			panic(fmt.Sprintf("commitTo pos=%d advanced past all log entries (%d)", pos, len(l.entries)))
+		}
+		if l.entries[pos].Index > commitIndex {
+			panic("commitTo advanced past the desired commitIndex")
+		}
+
+		// Encode the entry to persistent storage.
+		if err := l.entries[pos].encode(l.store); err != nil {
 			return err
 		}
-		resp, err := l.apply(l.entries[i].Command)
+
+		// Apply the entry's command to our state machine.
+		resp, err := l.apply(l.entries[pos].Command)
 		if err != nil {
 			return err
 		}
-		if l.entries[i].commandResponse != nil {
+
+		// Transmit the response to waiting client, if applicable.
+		if l.entries[pos].commandResponse != nil {
 			select {
-			case l.entries[i].commandResponse <- resp: // TODO could `go` this
+			case l.entries[pos].commandResponse <- resp: // TODO could `go` this
 				//
 			case <-time.After(BroadcastInterval()): // << ElectionInterval
 				panic("uncoöperative command response receiver")
 			}
-			close(l.entries[i].commandResponse)
-			l.entries[i].commandResponse = nil
+			close(l.entries[pos].commandResponse)
+			l.entries[pos].commandResponse = nil
 		}
-		l.commitIndex = l.entries[i].Index
+
+		// Mark our commit position cursor.
+		l.commitPos = pos
+
+		// If that was the last one, we're done.
+		if l.entries[pos].Index == commitIndex {
+			break
+		}
+		if l.entries[pos].Index > commitIndex {
+			panic(fmt.Sprintf("current entry Index %d is beyond our desired commitIndex %d", l.entries[pos].Index, commitIndex))
+		}
+
+		// Otherwise, advance!
+		pos++
 	}
 
+	// Done.
 	return nil
 }
 

@@ -70,7 +70,7 @@ func TestLimitedClientPatience(t *testing.T) {
 }
 
 func TestLenientCommit(t *testing.T) {
-	// a log with lastIndex=5 commitIndex=5
+	// a log that's fully committed
 	log := &Log{
 		entries: []LogEntry{
 			LogEntry{Index: 1, Term: 1},
@@ -79,7 +79,7 @@ func TestLenientCommit(t *testing.T) {
 			LogEntry{Index: 4, Term: 2},
 			LogEntry{Index: 5, Term: 2},
 		},
-		commitIndex: 5,
+		commitPos: 4,
 	}
 
 	// belongs to a follower
@@ -97,7 +97,7 @@ func TestLenientCommit(t *testing.T) {
 		LeaderId:     101,
 		PrevLogIndex: 5,
 		PrevLogTerm:  2,
-		CommitIndex:  4,
+		CommitIndex:  4, // i.e. commitPos=3
 	})
 
 	// this should not fail

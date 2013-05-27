@@ -741,11 +741,14 @@ func (s *Server) leaderSelect() {
 
 			// Special case: network of 1
 			if len(recipients) <= 0 {
-				if err := s.log.commitTo(s.log.lastIndex()); err != nil {
-					s.logGeneric("commitTo(%d): %s", s.log.lastIndex(), err)
-					continue
+				ourLastIndex := s.log.lastIndex()
+				if ourLastIndex > 0 {
+					if err := s.log.commitTo(ourLastIndex); err != nil {
+						s.logGeneric("commitTo(%d): %s", ourLastIndex, err)
+						continue
+					}
+					s.logGeneric("after commitTo(%d), commitIndex=%d", ourLastIndex, s.log.getCommitIndex())
 				}
-				s.logGeneric("after commitTo(%d), commitIndex=%d", s.log.lastIndex(), s.log.getCommitIndex())
 				continue
 			}
 

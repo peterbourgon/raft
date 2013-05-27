@@ -149,7 +149,7 @@ func TestLogAppend(t *testing.T) {
 
 	// Commit the first two, only
 	if err := log.commitTo(2); err != nil {
-		t.Errorf("commitTo: %s", err)
+		t.Fatalf("commitTo: %s", err)
 	}
 
 	// Check our flush buffer
@@ -252,13 +252,13 @@ func TestLogTruncation(t *testing.T) {
 	}
 
 	if expected, got := ErrIndexTooBig, log.ensureLastIs(4, 3); expected != got {
-		t.Errorf("expected %s, got %s", expected, got)
+		t.Errorf("expected %s, got %v", expected, got)
 	}
 	if expected, got := ErrIndexTooSmall, log.ensureLastIs(1, 1); expected != got {
-		t.Errorf("expected %s, got %s", expected, got) // before commitIndex
+		t.Errorf("expected %s, got %v", expected, got) // before commitIndex
 	}
 	if expected, got := ErrBadTerm, log.ensureLastIs(3, 4); expected != got {
-		t.Errorf("expected %s, got %s", expected, got)
+		t.Errorf("expected %s, got %v", expected, got)
 	}
 
 	if err := log.ensureLastIs(3, 2); err != nil {
@@ -272,6 +272,47 @@ func TestLogTruncation(t *testing.T) {
 	}
 	if !log.contains(2, 1) {
 		t.Fatal("(2,1) should still exist but it seems to be missing")
+	}
+}
+
+func TestLogCommitNoDuplicate(t *testing.T) {
+	// A pathological case: serial commitTo may double-apply the first command
+	hits := 0
+	apply := func([]byte) ([]byte, error) { hits++; return []byte{}, nil }
+	log := NewLog(&bytes.Buffer{}, apply)
+
+	log.appendEntry(LogEntry{Index: 1, Term: 1, Command: []byte(`{}`)})
+	log.commitTo(1)
+	if expected, got := 1, hits; expected != got {
+		t.Errorf("expected %d hits, got %d", expected, got)
+	}
+
+	log.appendEntry(LogEntry{Index: 2, Term: 1, Command: []byte(`{}`)})
+	log.commitTo(2)
+	if expected, got := 2, hits; expected != got {
+		t.Errorf("expected %d hits, got %d", expected, got)
+	}
+
+	log.appendEntry(LogEntry{Index: 3, Term: 1, Command: []byte(`{}`)})
+	log.commitTo(3)
+	if expected, got := 3, hits; expected != got {
+		t.Errorf("expected %d hits, got %d", expected, got)
+	}
+}
+
+func TestLogCommitTwice(t *testing.T) {
+	// A pathological case: commitTo(N) twice in a row should be fine.
+	log := NewLog(&bytes.Buffer{}, noop)
+
+	log.appendEntry(LogEntry{Index: 1, Term: 1, Command: []byte(`{}`)})
+	log.commitTo(1)
+
+	log.appendEntry(LogEntry{Index: 2, Term: 1, Command: []byte(`{}`)})
+	log.commitTo(2)
+	log.commitTo(2) // shouldn't crash
+
+	if expected, got := uint64(2), log.getCommitIndex(); expected != got {
+		t.Errorf("expected commitIndex %d, got %d", expected, got)
 	}
 }
 
