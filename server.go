@@ -34,6 +34,7 @@ var (
 	ErrDeposed               = errors.New("deposed during replication")
 	ErrAppendEntriesRejected = errors.New("AppendEntries RPC rejected")
 	ErrReplicationFailed     = errors.New("command replication failed (but will keep retrying)")
+	ErrOutOfSync             = errors.New("out of sync")
 )
 
 // ResetElectionTimeoutMs sets the minimum and maximum election timeouts to the
@@ -517,7 +518,7 @@ func newNextIndex(peers Peers, defaultNextIndex uint64) *nextIndex {
 	return ni
 }
 
-func (ni *nextIndex) LowestNextIndex() uint64 {
+func (ni *nextIndex) bestIndex() uint64 {
 	ni.RLock()
 	defer ni.RUnlock()
 
@@ -534,7 +535,7 @@ func (ni *nextIndex) LowestNextIndex() uint64 {
 	return i
 }
 
-func (ni *nextIndex) PrevLogIndex(id uint64) uint64 {
+func (ni *nextIndex) prevLogIndex(id uint64) uint64 {
 	ni.RLock()
 	defer ni.RUnlock()
 	if _, ok := ni.m[id]; !ok {
@@ -543,22 +544,39 @@ func (ni *nextIndex) PrevLogIndex(id uint64) uint64 {
 	return ni.m[id]
 }
 
-func (ni *nextIndex) Decrement(id uint64) {
+func (ni *nextIndex) decrement(id uint64, prev uint64) (uint64, error) {
 	ni.Lock()
 	defer ni.Unlock()
-	if i, ok := ni.m[id]; !ok {
+
+	i, ok := ni.m[id]
+	if !ok {
 		panic(fmt.Sprintf("peer %d not found", id))
-	} else if i > 0 {
-		// This value can reach 0, so it should not be passed
-		// directly to log.entriesAfter.
+	}
+
+	if i != prev {
+		return i, ErrOutOfSync
+	}
+
+	if i > 0 {
 		ni.m[id]--
 	}
+	return ni.m[id], nil
 }
 
-func (ni *nextIndex) Set(id, index uint64) {
+func (ni *nextIndex) set(id, index, prev uint64) (uint64, error) {
 	ni.Lock()
 	defer ni.Unlock()
+
+	i, ok := ni.m[id]
+	if !ok {
+		panic(fmt.Sprintf("peer %d not found", id))
+	}
+	if i != prev {
+		return i, ErrOutOfSync
+	}
+
 	ni.m[id] = index
+	return index, nil
 }
 
 // flush generates and forwards an AppendEntries request that attempts to bring
@@ -570,13 +588,13 @@ func (ni *nextIndex) Set(id, index uint64) {
 // manages that state.
 //
 // flush is synchronous and can block forever if the peer is nonresponsive.
-func (s *Server) flush(peer Peer, ni *nextIndex, cancel chan struct{}) error {
+func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	peerId := peer.Id()
 	currentTerm := s.term
-	prevLogIndex := ni.PrevLogIndex(peerId)
+	prevLogIndex := ni.prevLogIndex(peerId)
 	entries, prevLogTerm := s.log.entriesAfter(prevLogIndex)
 	commitIndex := s.log.getCommitIndex()
-	s.logGeneric("flush: to %d: term=%d leaderId=%d prevLogIndex/Term=%d/%d sz=%d commitIndex=%d", peerId, currentTerm, s.id, prevLogIndex, prevLogTerm, len(entries), commitIndex)
+	s.logGeneric("flush to %d: term=%d leaderId=%d prevLogIndex/Term=%d/%d sz=%d commitIndex=%d", peerId, currentTerm, s.id, prevLogIndex, prevLogTerm, len(entries), commitIndex)
 	resp := peer.AppendEntries(AppendEntries{
 		Term:         currentTerm,
 		LeaderId:     s.id,
@@ -586,36 +604,41 @@ func (s *Server) flush(peer Peer, ni *nextIndex, cancel chan struct{}) error {
 		CommitIndex:  commitIndex,
 	})
 
-	select {
-	case <-cancel:
-		s.logGeneric("flush: to %d: canceled (due to timeout), ignoring response", peerId)
-		return ErrTimeout // nobody listening anyway
-	default:
-		break
-	}
-
 	if resp.Term > currentTerm {
-		s.logGeneric("flush: to %d: responseTerm=%d > currentTerm=%d: deposed", peerId, resp.Term, currentTerm)
+		s.logGeneric("flush to %d: responseTerm=%d > currentTerm=%d: deposed", peerId, resp.Term, currentTerm)
 		return ErrDeposed
 	}
+
+	// It's possible the leader has timed out waiting for us, and moved on.
+	// So we should be careful, here, to make only valid state changes to `ni`.
+
 	if !resp.Success {
-		ni.Decrement(peerId)
-		s.logGeneric("flush: to %d: rejected; prevLogIndex(%d) becomes %d", peerId, peerId, ni.PrevLogIndex(peerId))
+		newPrevLogIndex, err := ni.decrement(peerId, prevLogIndex)
+		if err != nil {
+			s.logGeneric("flush to %d: while decrementing prevLogIndex: %s", peerId, err)
+			return err
+		}
+		s.logGeneric("flush to %d: rejected; prevLogIndex(%d) becomes %d", peerId, peerId, newPrevLogIndex)
 		return ErrAppendEntriesRejected
 	}
 
 	if len(entries) > 0 {
-		ni.Set(peer.Id(), entries[len(entries)-1].Index)
-		s.logGeneric("flush: to %d: accepted; prevLogIndex(%d) becomes %d", peerId, peerId, ni.PrevLogIndex(peerId))
+		newPrevLogIndex, err := ni.set(peer.Id(), entries[len(entries)-1].Index, prevLogIndex)
+		if err != nil {
+			s.logGeneric("flush to %d: while moving prevLogIndex forward: %s", peerId, err)
+			return err
+		}
+		s.logGeneric("flush to %d: accepted; prevLogIndex(%d) becomes %d", peerId, peerId, newPrevLogIndex)
 		return nil
 	}
 
-	s.logGeneric("flush: to %d: accepted; prevLogIndex(%d) remains %d", peerId, peerId, ni.PrevLogIndex(peerId))
+	s.logGeneric("flush to %d: accepted; prevLogIndex(%d) remains %d", peerId, peerId, ni.prevLogIndex(peerId))
 	return nil
 }
 
-// concurrentFlush triggers a concurrent flush to each of the peers.
-// timeout is per-Peer.
+// concurrentFlush triggers a concurrent flush to each of the peers. All peers
+// must respond (or timeout) before concurrentFlush will return. timeout is per
+// peer.
 func (s *Server) concurrentFlush(peers Peers, ni *nextIndex, timeout time.Duration) (int, bool) {
 	type tuple struct {
 		id  uint64
@@ -625,10 +648,9 @@ func (s *Server) concurrentFlush(peers Peers, ni *nextIndex, timeout time.Durati
 	for _, peer := range peers {
 		go func(peer0 Peer) {
 			err0 := make(chan error, 1)
-			cancel := make(chan struct{})
-			go func() { err0 <- s.flush(peer0, ni, cancel) }()
-			go func() { time.Sleep(timeout); close(cancel); err0 <- ErrTimeout }()
-			responses <- tuple{peer0.Id(), <-err0}
+			go func() { err0 <- s.flush(peer0, ni) }()
+			go func() { time.Sleep(timeout); err0 <- ErrTimeout }()
+			responses <- tuple{peer0.Id(), <-err0} // first responder wins
 		}(peer)
 	}
 
@@ -636,13 +658,13 @@ func (s *Server) concurrentFlush(peers Peers, ni *nextIndex, timeout time.Durati
 	for i := 0; i < cap(responses); i++ {
 		switch t := <-responses; t.err {
 		case nil:
-			s.logGeneric("concurrentFlush: peer %d: OK (prevLogIndex(%d)=%d)", t.id, t.id, ni.PrevLogIndex(t.id))
+			s.logGeneric("concurrentFlush: peer %d: OK (prevLogIndex(%d)=%d)", t.id, t.id, ni.prevLogIndex(t.id))
 			successes++
 		case ErrDeposed:
 			s.logGeneric("concurrentFlush: peer %d: deposed!", t.id)
 			stepDown = true
 		default:
-			s.logGeneric("concurrentFlush: peer %d: %s (prevLogIndex(%d)=%d)", t.id, t.err, t.id, ni.PrevLogIndex(t.id))
+			s.logGeneric("concurrentFlush: peer %d: %s (prevLogIndex(%d)=%d)", t.id, t.err, t.id, ni.prevLogIndex(t.id))
 			// nothing to do but log and continue
 		}
 	}
@@ -740,7 +762,7 @@ func (s *Server) leaderSelect() {
 			// consider incrementing commitIndex and pushing out another
 			// round of flushes.
 			if successes == len(recipients) {
-				peersBestIndex := ni.LowestNextIndex()
+				peersBestIndex := ni.bestIndex()
 				ourLastIndex := s.log.lastIndex()
 				ourCommitIndex := s.log.getCommitIndex()
 				if peersBestIndex > ourLastIndex {
@@ -748,6 +770,7 @@ func (s *Server) leaderSelect() {
 					s.logGeneric("peers' best index %d > our lastIndex %d", peersBestIndex, ourLastIndex)
 					s.logGeneric("this is crazy, I'm gonna become a follower")
 					s.leader = unknownLeader
+					s.vote = noVote
 					s.state.Set(Follower)
 					return
 				}
@@ -756,8 +779,10 @@ func (s *Server) leaderSelect() {
 						s.logGeneric("commitTo(%d): %s", peersBestIndex, err)
 						continue // oh well, next time?
 					}
-					s.logGeneric("after commitTo(%d), commitIndex=%d (queueing a flush)", s.log.lastIndex(), s.log.getCommitIndex())
-					go func() { flush <- struct{}{} }()
+					if s.log.getCommitIndex() > ourCommitIndex {
+						s.logGeneric("after commitTo(%d), commitIndex=%d -- queueing another flush", peersBestIndex, s.log.getCommitIndex())
+						go func() { flush <- struct{}{} }()
+					}
 				}
 			}
 

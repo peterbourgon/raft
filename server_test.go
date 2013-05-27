@@ -317,8 +317,10 @@ func testOrder(t *testing.T, nServers int) {
 			case raft.ErrUnknownLeader, raft.ErrDeposed:
 				log.Printf("command=%d/%d peer=%d: failed (%s) -- will retry", i+1, len(cmds), id, err)
 				time.Sleep(raft.ElectionTimeout())
+				continue
 			case raft.ErrTimeout:
-				log.Printf("command=%d/%d peer=%d: timed out -- we'll assume it went through", i+1, len(cmds), id)
+				log.Printf("command=%d/%d peer=%d: timed out -- assume it went through", i+1, len(cmds), id)
+				break retry
 			default:
 				t.Fatalf("command=%d/%d peer=%d: failed (%s) -- fatal", i+1, len(cmds), id, err)
 			}
