@@ -29,13 +29,18 @@ func TestFollowerToCandidate(t *testing.T) {
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(raft.MakePeers(nonresponsivePeer(2), nonresponsivePeer(3)))
+
+	server.Start()
+	defer server.Stop()
+
+	injectConfig(t, server, raft.MakePeers(
+		raft.NewLocalPeer(server),
+		nonresponsivePeer(2),
+		nonresponsivePeer(3),
+	))
 	if server.State() != raft.Follower {
 		t.Fatalf("didn't start as Follower")
 	}
-
-	server.Start()
-	defer func() { server.Stop(); t.Logf("server stopped") }()
 
 	time.Sleep(raft.MaximumElectionTimeout())
 
@@ -63,10 +68,15 @@ func TestCandidateToLeader(t *testing.T) {
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(raft.MakePeers(nonresponsivePeer(1), approvingPeer(2), nonresponsivePeer(3)))
-	server.Start()
-	defer func() { server.Stop(); t.Logf("server stopped") }()
 
+	server.Start()
+	defer server.Stop()
+
+	injectConfig(t, server, raft.MakePeers(
+		raft.NewLocalPeer(server),
+		approvingPeer(2),
+		nonresponsivePeer(3),
+	))
 	time.Sleep(raft.MaximumElectionTimeout())
 
 	cutoff := time.Now().Add(2 * raft.MaximumElectionTimeout())
@@ -93,11 +103,17 @@ func TestFailedElection(t *testing.T) {
 
 	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(raft.MakePeers(disapprovingPeer(2), nonresponsivePeer(3)))
-	server.Start()
-	defer func() { server.Stop(); t.Logf("server stopped") }()
 
+	server.Start()
+	defer server.Stop()
+
+	injectConfig(t, server, raft.MakePeers(
+		raft.NewLocalPeer(server),
+		disapprovingPeer(2),
+		nonresponsivePeer(3),
+	))
 	time.Sleep(2 * raft.ElectionTimeout())
+
 	if server.State() == raft.Leader {
 		t.Fatalf("erroneously became Leader")
 	}
@@ -146,16 +162,16 @@ func TestSimpleConsensus(t *testing.T) {
 		raft.NewLocalPeer(s3),
 	)
 
-	s1.SetPeers(peers)
-	s2.SetPeers(peers)
-	s3.SetPeers(peers)
-
 	s1.Start()
 	s2.Start()
 	s3.Start()
 	defer s1.Stop()
 	defer s2.Stop()
 	defer s3.Stop()
+
+	injectConfig(t, s1, peers)
+	injectConfig(t, s2, peers)
+	injectConfig(t, s3, peers)
 
 	var v int32 = 42
 	cmd, _ := json.Marshal(SetValue{v})
@@ -275,9 +291,6 @@ func testOrder(t *testing.T, nServers int) {
 	for _, server := range servers {
 		peers[server.Id()] = raft.NewLocalPeer(server)
 	}
-	for _, server := range servers {
-		server.SetPeers(peers)
-	}
 
 	// define cmds
 	cmds := []send{}
@@ -299,6 +312,11 @@ func testOrder(t *testing.T, nServers int) {
 			log.Printf("issuing stop command to server %d", server0.Id())
 			server0.Stop()
 		}(server)
+	}
+
+	// inject configurations
+	for _, server := range servers {
+		injectConfig(t, server, peers)
 	}
 
 	// send commands
@@ -367,6 +385,17 @@ func testOrder(t *testing.T, nServers int) {
 //
 //
 
+func injectConfig(t *testing.T, s *raft.Server, p raft.Peers) {
+	for {
+		if err := s.Configuration(p); err != nil {
+			t.Logf("server %d: Configuration(): %s (will retry)", s.Id(), err)
+			time.Sleep(raft.BroadcastInterval())
+			continue
+		}
+		return
+	}
+}
+
 func printOnFailure(t *testing.T, r io.Reader) {
 	if !t.Failed() {
 		return
@@ -410,6 +439,15 @@ func (p nonresponsivePeer) RequestVote(raft.RequestVote) raft.RequestVoteRespons
 func (p nonresponsivePeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
+func (p nonresponsivePeer) Configuration(raft.Peers) error {
+	return fmt.Errorf("not implemented")
+}
+func (p nonresponsivePeer) MarshalJSON() ([]byte, error) {
+	return []byte{}, fmt.Errorf("not implemented")
+}
+func (p nonresponsivePeer) UnmarshalJSON([]byte) error {
+	return fmt.Errorf("not implemented")
+}
 
 type approvingPeer uint64
 
@@ -426,6 +464,15 @@ func (p approvingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteResponse
 func (p approvingPeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
+func (p approvingPeer) Configuration(raft.Peers) error {
+	return fmt.Errorf("not implemented")
+}
+func (p approvingPeer) MarshalJSON() ([]byte, error) {
+	return []byte{}, fmt.Errorf("not implemented")
+}
+func (p approvingPeer) UnmarshalJSON([]byte) error {
+	return fmt.Errorf("not implemented")
+}
 
 type disapprovingPeer uint64
 
@@ -440,5 +487,14 @@ func (p disapprovingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteRespo
 	}
 }
 func (p disapprovingPeer) Command([]byte, chan []byte) error {
+	return fmt.Errorf("not implemented")
+}
+func (p disapprovingPeer) Configuration(raft.Peers) error {
+	return fmt.Errorf("not implemented")
+}
+func (p disapprovingPeer) MarshalJSON() ([]byte, error) {
+	return []byte{}, fmt.Errorf("not implemented")
+}
+func (p disapprovingPeer) UnmarshalJSON([]byte) error {
 	return fmt.Errorf("not implemented")
 }

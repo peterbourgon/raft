@@ -1,13 +1,15 @@
 package raft
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 )
 
 var (
-	ErrTimeout        = errors.New("timeout")
-	ErrInvalidRequest = errors.New("invalid request")
+	ErrTimeout                = errors.New("timeout")
+	ErrInvalidRequest         = errors.New("invalid request")
+	ErrLocalPeerSerialization = errors.New("cannot serialize local peer")
 )
 
 // Peer is anything which provides a Raft-domain interface to a server. Peer is
@@ -15,11 +17,17 @@ var (
 // mechanisms (e.g. pure local, net/rpc, Protobufs, HTTP...). All peers should
 // be 1:1 with a server. Things that implement Peer exist in the process-space
 // of the local Raft node.
+//
+// In order to support configuration changes, Peers must be JSON serializable.
 type Peer interface {
+	json.Marshaler
+	json.Unmarshaler
+
 	Id() uint64
 	AppendEntries(AppendEntries) AppendEntriesResponse
 	RequestVote(RequestVote) RequestVoteResponse
 	Command([]byte, chan []byte) error
+	Configuration(Peers) error
 }
 
 // LocalPeer is the simplest kind of peer, mapped to a server in the
@@ -43,6 +51,18 @@ func (p *LocalPeer) RequestVote(rv RequestVote) RequestVoteResponse {
 
 func (p *LocalPeer) Command(cmd []byte, response chan []byte) error {
 	return p.server.Command(cmd, response)
+}
+
+func (p *LocalPeer) Configuration(peers Peers) error {
+	return p.server.Configuration(peers)
+}
+
+func (p *LocalPeer) MarshalJSON() ([]byte, error) {
+	return []byte{}, ErrLocalPeerSerialization
+}
+
+func (p *LocalPeer) UnmarshalJSON([]byte) error {
+	return ErrLocalPeerSerialization
 }
 
 // requestVoteTimeout issues the RequestVote to the given peer.
