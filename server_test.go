@@ -306,32 +306,39 @@ func testOrder(t *testing.T, nServers int) {
 		id := uint64(rand.Intn(nServers)) + 1
 		peer := peers[id]
 		buf, _ := json.Marshal(cmd)
-		response := make(chan []byte, 1)
-	retry:
+
 		for {
 			log.Printf("command=%d/%d peer=%d: sending %s", i+1, len(cmds), id, buf)
-			switch err := peer.Command(buf, response); err {
+			response := make(chan []byte, 1)
+			err := peer.Command(buf, response)
+
+			switch err {
 			case nil:
 				log.Printf("command=%d/%d peer=%d: OK", i+1, len(cmds), id)
-				break retry
+				break
+
 			case raft.ErrUnknownLeader, raft.ErrDeposed:
 				log.Printf("command=%d/%d peer=%d: failed (%s) -- will retry", i+1, len(cmds), id, err)
 				time.Sleep(raft.ElectionTimeout())
 				continue
+
 			case raft.ErrTimeout:
 				log.Printf("command=%d/%d peer=%d: timed out -- assume it went through", i+1, len(cmds), id)
-				break retry
+				break
+
 			default:
 				t.Fatalf("command=%d/%d peer=%d: failed (%s) -- fatal", i+1, len(cmds), id, err)
 			}
+
+			r, ok := <-response
+			if !ok {
+				log.Printf("command=%d/%d peer=%d: truncated, will retry", i+1, len(cmds), id)
+				continue
+			}
+
+			log.Printf("command=%d/%d peer=%d: OK, got response %s", i+1, len(cmds), id, string(r))
+			break
 		}
-		r, ok := <-response
-		if !ok {
-			log.Printf("command=%d/%d peer=%d: truncated, will retry", i+1, len(cmds), id)
-			response = make(chan []byte, 1) // channel was closed, must re-make
-			goto retry
-		}
-		log.Printf("command=%d/%d peer=%d: OK, got response %s", i+1, len(cmds), id, string(r))
 	}
 
 	// done sending

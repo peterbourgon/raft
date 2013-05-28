@@ -329,8 +329,8 @@ func (l *Log) commitTo(commitIndex uint64) error {
 		// Transmit the response to waiting client, if applicable.
 		if l.entries[pos].commandResponse != nil {
 			select {
-			case l.entries[pos].commandResponse <- resp: // TODO could `go` this
-				//
+			case l.entries[pos].commandResponse <- resp:
+				break
 			case <-time.After(BroadcastInterval()): // << ElectionInterval
 				panic("uncoöperative command response receiver")
 			}
