@@ -49,9 +49,11 @@ func (l *Log) recover(r io.Reader) error {
 		case io.EOF:
 			return nil // successful completion
 		case nil:
-			if err = l.appendEntry(entry); err != nil {
+			if err := l.appendEntry(entry); err != nil {
 				return err
 			}
+			l.commitPos++
+			l.apply(entry.Index, entry.Command)
 		default:
 			return err // unsuccessful completion
 		}

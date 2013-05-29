@@ -364,6 +364,20 @@ func TestCleanLogRecovery(t *testing.T) {
 		t.Errorf("log doesn't contain index=3 term=2")
 	}
 
+	if expected, got := uint64(3), log.getCommitIndex(); expected != got {
+		t.Errorf("expected commit index = %d, got %d", expected, got)
+	}
+
+	if expected, got := uint64(2), log.lastTerm(); expected != got {
+		t.Errorf("expected term = %d, got %d", expected, got)
+	}
+
+	log.commitTo(3) // should be a no-op
+
+	if buf.Len() > 0 {
+		t.Errorf("commit to recovered index wrote to buffer")
+	}
+
 	if err := log.appendEntry(LogEntry{
 		Index:   4,
 		Term:    3,
