@@ -26,10 +26,10 @@ type Log struct {
 	store     io.Writer
 	entries   []LogEntry
 	commitPos int
-	apply     func([]byte) ([]byte, error)
+	apply     func(uint64, []byte) ([]byte, error)
 }
 
-func NewLog(store io.ReadWriter, apply func([]byte) ([]byte, error)) *Log {
+func NewLog(store io.ReadWriter, apply func(uint64, []byte) ([]byte, error)) *Log {
 	l := &Log{
 		store:     store,
 		entries:   []LogEntry{},
@@ -321,7 +321,7 @@ func (l *Log) commitTo(commitIndex uint64) error {
 		}
 
 		// Apply the entry's command to our state machine.
-		resp, err := l.apply(l.entries[pos].Command)
+		resp, err := l.apply(l.entries[pos].Index, l.entries[pos].Command)
 		if err != nil {
 			return err
 		}

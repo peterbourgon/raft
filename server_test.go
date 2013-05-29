@@ -21,15 +21,17 @@ func init() {
 	log.SetFlags(log.Lmicroseconds)
 }
 
+func noop(uint64, []byte) ([]byte, error) {
+	return []byte{}, nil
+}
+
 func TestFollowerToCandidate(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
 	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
 	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-
 	server.Start()
 	defer server.Stop()
 
@@ -66,9 +68,7 @@ func TestCandidateToLeader(t *testing.T) {
 	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
 	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-
 	server.Start()
 	defer server.Stop()
 
@@ -101,9 +101,7 @@ func TestFailedElection(t *testing.T) {
 	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
 	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-
 	server.Start()
 	defer server.Stop()
 
@@ -134,8 +132,8 @@ func TestSimpleConsensus(t *testing.T) {
 
 	var i1, i2, i3 int32
 
-	applyValue := func(id uint64, i *int32) func([]byte) ([]byte, error) {
-		return func(cmd []byte) ([]byte, error) {
+	applyValue := func(id uint64, i *int32) func(uint64, []byte) ([]byte, error) {
+		return func(index uint64, cmd []byte) ([]byte, error) {
 			var sv SetValue
 			if err := json.Unmarshal(cmd, &sv); err != nil {
 				return []byte{}, err
@@ -269,8 +267,8 @@ func testOrder(t *testing.T, nServers int) {
 	type recv struct {
 		Recv int `json:"recv"`
 	}
-	do := func(sb *synchronizedBuffer) func(buf []byte) ([]byte, error) {
-		return func(buf []byte) ([]byte, error) {
+	do := func(sb *synchronizedBuffer) func(uint64, []byte) ([]byte, error) {
+		return func(index uint64, buf []byte) ([]byte, error) {
 			sb.Write(buf)                           // write incoming message
 			var s send                              // decode incoming message
 			json.Unmarshal(buf, &s)                 // ...
