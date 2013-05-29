@@ -148,13 +148,18 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 		panic("server id must be > 0")
 	}
 
+	log := NewLog(store, apply)
+	// 5.2 Leader election: the latest term this server has seen is persisted,
+	// and is initialized to 0 on first boot.
+	latestTerm := log.lastTerm()
+
 	s := &Server{
 		id:            id,
 		state:         &serverState{value: Follower}, // "when servers start up they begin as followers"
 		running:       &serverRunning{value: false},
 		leader:        unknownLeader, // unknown at startup
-		term:          1,             // TODO is this correct?
-		log:           NewLog(store, apply),
+		log:           log,
+		term:          latestTerm,
 		configuration: nil,
 
 		appendEntriesChan: make(chan appendEntriesTuple),

@@ -153,12 +153,23 @@ func TestLogAppend(t *testing.T) {
 	}
 
 	// Check our flush buffer
-	lines := []string{
-		`02869b0c 0000000000000001 0000000000000001 {}`,
-		`3bfe364c 0000000000000002 0000000000000001 {}`,
-	}
-	if expected, got := strings.Join(lines, "\n")+"\n", buf.String(); expected != got {
-		t.Errorf("after commit, expected:\n%s\ngot:\n%s\n", expected, got)
+	for i, expected := range log.entries[:2] {
+		var got LogEntry
+		if err := got.decode(buf); err != nil {
+			t.Fatalf("after commit, got: %s", err)
+		}
+
+		if expected.Term != got.Term {
+			t.Errorf("%d. decode expected term=%d, got %d", i, expected.Term, got.Term)
+		}
+
+		if expected.Index != got.Index {
+			t.Errorf("%d. decode expected index=%d, got %d", i, expected.Index, got.Index)
+		}
+
+		if !bytes.Equal(expected.Command, got.Command) {
+			t.Errorf("%d. decode expected command=%q, got %q", i, expected.Command, got.Command)
+		}
 	}
 
 	// Make some invalid commits
@@ -174,13 +185,23 @@ func TestLogAppend(t *testing.T) {
 		t.Errorf("commitTo: %s", err)
 	}
 
-	// Check our flush buffer again
-	lines = append(
-		lines,
-		`6b76285c 0000000000000003 0000000000000002 {}`,
-	)
-	if expected, got := strings.Join(lines, "\n")+"\n", buf.String(); expected != got {
-		t.Errorf("after commit, expected:\n%s\ngot:\n%s\n", expected, got)
+	// Check our buffer again
+	expected := log.entries[2]
+	var got LogEntry
+	if err := got.decode(buf); err != nil {
+		t.Fatalf("after commit, got: %s", err)
+	}
+
+	if expected.Term != got.Term {
+		t.Errorf("%d. decode expected term=%d, got %d", 3, expected.Term, got.Term)
+	}
+
+	if expected.Index != got.Index {
+		t.Errorf("%d. decode expected index=%d, got %d", 3, expected.Index, got.Index)
+	}
+
+	if !bytes.Equal(expected.Command, got.Command) {
+		t.Errorf("%d. decode expected command=%q, got %q", 3, expected.Command, got.Command)
 	}
 }
 
@@ -317,16 +338,19 @@ func TestLogCommitTwice(t *testing.T) {
 }
 
 func TestCleanLogRecovery(t *testing.T) {
-	lines := []string{
-		`02869b0c 0000000000000001 0000000000000001 {}`,
-		`3bfe364c 0000000000000002 0000000000000001 {}`,
-		`6b76285c 0000000000000003 0000000000000002 {}`,
+	entries := []LogEntry{
+		{1, 1, []byte("{}"), nil},
+		{2, 1, []byte("{}"), nil},
+		{3, 2, []byte("{}"), nil},
 	}
 
-	buf := bytes.NewBufferString(strings.Join(lines, "\n") + "\n")
+	buf := new(bytes.Buffer)
+	for _, entry := range entries {
+		entry.encode(buf)
+	}
 	log := NewLog(buf, noop)
 
-	if expected, got := len(lines), len(log.entries); expected != got {
+	if expected, got := len(entries), len(log.entries); expected != got {
 		t.Fatalf("expected %d, got %d", expected, got)
 	}
 
@@ -338,6 +362,20 @@ func TestCleanLogRecovery(t *testing.T) {
 	}
 	if !log.contains(3, 2) {
 		t.Errorf("log doesn't contain index=3 term=2")
+	}
+
+	if expected, got := uint64(3), log.getCommitIndex(); expected != got {
+		t.Errorf("expected commit index = %d, got %d", expected, got)
+	}
+
+	if expected, got := uint64(2), log.lastTerm(); expected != got {
+		t.Errorf("expected term = %d, got %d", expected, got)
+	}
+
+	log.commitTo(3) // should be a no-op
+
+	if buf.Len() > 0 {
+		t.Errorf("commit to recovered index wrote to buffer")
 	}
 
 	if err := log.appendEntry(LogEntry{
@@ -356,16 +394,18 @@ func TestCleanLogRecovery(t *testing.T) {
 }
 
 func TestCorruptedLogRecovery(t *testing.T) {
-	lines := []string{
-		`02869b0c 0000000000000001 0000000000000001 {}`,
-		`3000000c 0000000000000002 0000000000000001 {}`, // bad line
-		`6b76285c 0000000000000003 0000000000000002 {}`,
+	entries := []LogEntry{
+		{1, 1, []byte("{}"), nil},
 	}
 
-	buf := bytes.NewBufferString(strings.Join(lines, "\n") + "\n")
+	buf := new(bytes.Buffer)
+	for _, entry := range entries {
+		entry.encode(buf)
+	}
+	buf.Write([]byte("garbage"))
 	log := NewLog(buf, noop)
 
-	if expected, got := 1, len(log.entries); expected != got {
+	if expected, got := len(entries), len(log.entries); expected != got {
 		t.Fatalf("expected %d, got %d", expected, got)
 	}
 
