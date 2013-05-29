@@ -143,7 +143,7 @@ type Server struct {
 // The store will be used by the distributed log as a persistence layer.
 // The apply function will be called whenever a (user-domain) command has been
 // safely replicated to this server, and can be considered committed.
-func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) ([]byte, error)) *Server {
+func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte) *Server {
 	if id <= 0 {
 		panic("server id must be > 0")
 	}

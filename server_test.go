@@ -21,8 +21,8 @@ func init() {
 	log.SetFlags(log.Lmicroseconds)
 }
 
-func noop(uint64, []byte) ([]byte, error) {
-	return []byte{}, nil
+func noop(uint64, []byte) []byte {
+	return []byte{}
 }
 
 func TestFollowerToCandidate(t *testing.T) {
@@ -132,14 +132,18 @@ func TestSimpleConsensus(t *testing.T) {
 
 	var i1, i2, i3 int32
 
-	applyValue := func(id uint64, i *int32) func(uint64, []byte) ([]byte, error) {
-		return func(index uint64, cmd []byte) ([]byte, error) {
+	applyValue := func(id uint64, i *int32) func(uint64, []byte) []byte {
+		return func(index uint64, cmd []byte) []byte {
 			var sv SetValue
 			if err := json.Unmarshal(cmd, &sv); err != nil {
-				return []byte{}, err
+				var buf bytes.Buffer
+				json.NewEncoder(&buf).Encode(map[string]interface{}{"error": err.Error()})
+				return buf.Bytes()
 			}
 			atomic.StoreInt32(i, sv.Value)
-			return json.Marshal(map[string]interface{}{"applied_to_server": id, "applied_value": sv.Value})
+			var buf bytes.Buffer
+			json.NewEncoder(&buf).Encode(map[string]interface{}{"applied_to_server": id, "applied_value": sv.Value})
+			return buf.Bytes()
 		}
 	}
 
@@ -267,12 +271,14 @@ func testOrder(t *testing.T, nServers int) {
 	type recv struct {
 		Recv int `json:"recv"`
 	}
-	do := func(sb *synchronizedBuffer) func(uint64, []byte) ([]byte, error) {
-		return func(index uint64, buf []byte) ([]byte, error) {
-			sb.Write(buf)                           // write incoming message
-			var s send                              // decode incoming message
-			json.Unmarshal(buf, &s)                 // ...
-			return json.Marshal(recv{Recv: s.Send}) // write outgoing message
+	do := func(sb *synchronizedBuffer) func(uint64, []byte) []byte {
+		return func(index uint64, cmd []byte) []byte {
+			sb.Write(cmd) // write incoming message
+			var s send    // decode incoming message
+			json.Unmarshal(cmd, &s)
+			var buf bytes.Buffer
+			json.NewEncoder(&buf).Encode(recv{Recv: s.Send})
+			return buf.Bytes() // write outgoing message
 		}
 	}
 

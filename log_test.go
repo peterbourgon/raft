@@ -11,8 +11,8 @@ func oneshot() chan []byte {
 	return make(chan []byte, 1)
 }
 
-func noop(uint64, []byte) ([]byte, error) {
-	return []byte{}, nil
+func noop(uint64, []byte) []byte {
+	return []byte{}
 }
 
 func TestLogEntriesAfter(t *testing.T) {
@@ -278,7 +278,7 @@ func TestLogTruncation(t *testing.T) {
 func TestLogCommitNoDuplicate(t *testing.T) {
 	// A pathological case: serial commitTo may double-apply the first command
 	hits := 0
-	apply := func(uint64, []byte) ([]byte, error) { hits++; return []byte{}, nil }
+	apply := func(uint64, []byte) []byte { hits++; return []byte{} }
 	log := NewLog(&bytes.Buffer{}, apply)
 
 	log.appendEntry(LogEntry{Index: 1, Term: 1, Command: []byte(`{}`)})
