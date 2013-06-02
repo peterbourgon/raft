@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-func noop([]byte) ([]byte, error) { return []byte{}, nil }
+func noop(uint64, []byte) []byte { return []byte{} }
 
 var (
 	listenHost = "127.0.0.1"
@@ -75,7 +75,7 @@ func testServers(t *testing.T, n int) {
 
 	// inject each Raft protocol server with its peers
 	for _, raftServer := range raftServers {
-		raftServer.SetPeers(peers)
+		raftServer.SetConfiguration(peers)
 	}
 
 	// start each Raft protocol server
