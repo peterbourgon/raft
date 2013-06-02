@@ -35,6 +35,7 @@ var (
 	ErrAppendEntriesRejected = errors.New("AppendEntries RPC rejected")
 	ErrReplicationFailed     = errors.New("command replication failed (but will keep retrying)")
 	ErrOutOfSync             = errors.New("out of sync")
+	ErrNotRunning            = errors.New("not running")
 )
 
 // ResetElectionTimeoutMs sets the minimum and maximum election timeouts to the
@@ -119,18 +120,19 @@ func (s *serverRunning) Set(value bool) {
 // In a typical application, each running process that wants to be part of
 // the distributed state machine will contain a server component.
 type Server struct {
-	id      uint64 // id of this server
-	state   *serverState
-	running *serverRunning
-	leader  uint64 // who we believe is the leader
-	term    uint64 // "current term number, which increases monotonically"
-	vote    uint64 // who we voted for this term, if applicable
-	log     *Log
-	peers   Peers
+	id            uint64 // id of this server
+	state         *serverState
+	running       *serverRunning
+	leader        uint64 // who we believe is the leader
+	term          uint64 // "current term number, which increases monotonically"
+	vote          uint64 // who we voted for this term, if applicable
+	log           *Log
+	configuration Peers
 
 	appendEntriesChan chan appendEntriesTuple
 	requestVoteChan   chan requestVoteTuple
 	commandChan       chan commandTuple
+	configurationChan chan configurationTuple
 
 	electionTick <-chan time.Time
 	quit         chan chan struct{}
@@ -141,35 +143,56 @@ type Server struct {
 // The store will be used by the distributed log as a persistence layer.
 // The apply function will be called whenever a (user-domain) command has been
 // safely replicated to this server, and can be considered committed.
-func NewServer(id uint64, store io.ReadWriter, apply func([]byte) ([]byte, error)) *Server {
+func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte) *Server {
 	if id <= 0 {
 		panic("server id must be > 0")
 	}
 
+	log := NewLog(store, apply)
+	// 5.2 Leader election: the latest term this server has seen is persisted,
+	// and is initialized to 0 on first boot.
+	latestTerm := log.lastTerm()
+
 	s := &Server{
-		id:                id,
-		state:             &serverState{value: Follower}, // "when servers start up they begin as followers"
-		running:           &serverRunning{value: false},
-		leader:            unknownLeader, // unknown at startup
-		term:              1,             // TODO is this correct?
-		log:               NewLog(store, apply),
-		peers:             nil,
+		id:            id,
+		state:         &serverState{value: Follower}, // "when servers start up they begin as followers"
+		running:       &serverRunning{value: false},
+		leader:        unknownLeader, // unknown at startup
+		log:           log,
+		term:          latestTerm,
+		configuration: nil,
+
 		appendEntriesChan: make(chan appendEntriesTuple),
 		requestVoteChan:   make(chan requestVoteTuple),
 		commandChan:       make(chan commandTuple),
-		electionTick:      time.NewTimer(ElectionTimeout()).C, // one-shot
-		quit:              make(chan chan struct{}),
+		configurationChan: make(chan configurationTuple),
+
+		electionTick: nil,
+		quit:         make(chan chan struct{}),
 	}
+	s.resetElectionTimeout()
 	return s
 }
 
 func (s *Server) Id() uint64 { return s.id }
 
-// SetPeers injects the set of peers that this server will attempt to
+type configurationTuple struct {
+	Configuration Peers
+	Err           chan error
+}
+
+// Configuration injects the set of peers that this server will attempt to
 // communicate with, in its Raft network. The set peers should include a peer
 // that represents this server, so that quorum is calculated correctly.
-func (s *Server) SetPeers(p Peers) {
-	s.peers = p
+// Configuration should be called after starting the server.
+func (s *Server) Configuration(peers Peers) error {
+	if !s.running.Get() {
+		return ErrNotRunning
+	}
+
+	err := make(chan error)
+	s.configurationChan <- configurationTuple{peers, err}
+	return <-err
 }
 
 // State returns the current state: follower, candidate, or leader.
@@ -302,6 +325,34 @@ func (s *Server) logRequestVoteResponse(req RequestVote, resp RequestVoteRespons
 	)
 }
 
+func (s *Server) handleQuit(q chan struct{}) {
+	s.logGeneric("got quit signal")
+	s.running.Set(false)
+	close(q)
+}
+
+func (s *Server) handleConfiguration(t configurationTuple) {
+	if s.configuration.Count() <= 0 {
+		s.logGeneric("loading initial configuration")
+		s.configuration = t.Configuration
+		t.Err <- nil
+		return
+	}
+
+	switch s.leader {
+	case s.id:
+		panic("TODO joint-consensus mode")
+
+	default:
+		leader, ok := s.configuration[s.leader]
+		if !ok {
+			panic("invalid state in peers")
+		}
+		s.logGeneric("got configuration, forwarding to leader (%d)", s.leader)
+		go func() { t.Err <- leader.Configuration(t.Configuration) }()
+	}
+}
+
 func (s *Server) forwardCommand(t commandTuple) {
 	switch s.leader {
 	case unknownLeader:
@@ -312,7 +363,7 @@ func (s *Server) forwardCommand(t commandTuple) {
 		panic("impossible state in forwardCommand")
 
 	default:
-		leader, ok := s.peers[s.leader]
+		leader, ok := s.configuration[s.leader]
 		if !ok {
 			panic("invalid state in peers")
 		}
@@ -324,21 +375,46 @@ func (s *Server) forwardCommand(t commandTuple) {
 	}
 }
 
+func (s *Server) forwardConfiguration(t configurationTuple) {
+	switch s.leader {
+	case unknownLeader:
+		s.logGeneric("got configuration, but don't know leader")
+		t.Err <- ErrUnknownLeader
+
+	case s.id: // I am the leader
+		panic("impossible state in forwardConfiguration")
+
+	default:
+		leader, ok := s.configuration[s.leader]
+		if !ok {
+			panic("invalid state in peers")
+		}
+		s.logGeneric("got configuration, forwarding to leader (%d)", s.leader)
+		go func() { t.Err <- leader.Configuration(t.Configuration) }()
+	}
+}
+
 func (s *Server) followerSelect() {
 	for {
 		select {
 		case q := <-s.quit:
-			s.logGeneric("got quit signal")
-			s.running.Set(false)
-			close(q)
+			s.handleQuit(q)
 			return
 
 		case t := <-s.commandChan:
 			s.forwardCommand(t)
 
+		case t := <-s.configurationChan:
+			s.handleConfiguration(t)
+
 		case <-s.electionTick:
 			// 5.2 Leader election: "A follower increments its current term and
 			// transitions to candidate state."
+			if s.configuration.Count() <= 0 {
+				s.logGeneric("election timeout, but no configuration: ignoring")
+				s.resetElectionTimeout()
+				continue
+			}
 			s.logGeneric("election timeout, becoming candidate")
 			s.term++
 			s.vote = noVote
@@ -392,7 +468,7 @@ func (s *Server) candidateSelect() {
 	// parallel to each of the other servers in the cluster. If the candidate
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
-	responses, canceler := s.peers.Except(s.id).requestVotes(RequestVote{
+	responses, canceler := s.configuration.Except(s.id).requestVotes(RequestVote{
 		Term:         s.term,
 		CandidateId:  s.id,
 		LastLogIndex: s.log.lastIndex(),
@@ -401,12 +477,12 @@ func (s *Server) candidateSelect() {
 	defer canceler.Cancel()
 	s.vote = s.id      // vote for myself
 	votesReceived := 1 // already have a vote from myself
-	votesRequired := s.peers.Quorum()
+	votesRequired := s.configuration.Quorum()
 	s.logGeneric("term=%d election started, %d vote(s) required", s.term, votesRequired)
 
 	// catch a bad state
 	if votesReceived >= votesRequired {
-		s.logGeneric("%d-node cluster; I win", s.peers.Count())
+		s.logGeneric("%d-node cluster; I win", s.configuration.Count())
 		s.leader = s.id
 		s.state.Set(Leader)
 		s.vote = noVote
@@ -419,13 +495,14 @@ func (s *Server) candidateSelect() {
 	for {
 		select {
 		case q := <-s.quit:
-			s.logGeneric("got quit signal")
-			s.running.Set(false)
-			close(q)
+			s.handleQuit(q)
 			return
 
 		case t := <-s.commandChan:
 			s.forwardCommand(t)
+
+		case t := <-s.configurationChan:
+			s.handleConfiguration(t)
 
 		case r := <-responses:
 			s.logGeneric("got vote: term=%d granted=%v", r.Term, r.VoteGranted)
@@ -689,7 +766,7 @@ func (s *Server) leaderSelect() {
 	// doing the decrement. This was just annoying, except if you manage to
 	// sneak in a command before the first heartbeat. Then, it will never get
 	// properly replicated (it seemed).
-	ni := newNextIndex(s.peers.Except(s.id), s.log.lastIndex()) // +1)
+	ni := newNextIndex(s.configuration.Except(s.id), s.log.lastIndex()) // +1)
 
 	flush := make(chan struct{})
 	heartbeat := time.NewTicker(BroadcastInterval())
@@ -703,10 +780,11 @@ func (s *Server) leaderSelect() {
 	for {
 		select {
 		case q := <-s.quit:
-			s.logGeneric("got quit signal")
-			s.running.Set(false)
-			close(q)
+			s.handleQuit(q)
 			return
+
+		case t := <-s.configurationChan:
+			s.handleConfiguration(t)
 
 		case t := <-s.commandChan:
 			// Append the command to our (leader) log
@@ -737,7 +815,7 @@ func (s *Server) leaderSelect() {
 			// After every flush, we check if we can advance our commitIndex.
 			// If so, we do it, and trigger another flush ASAP.
 			// A flush can cause us to be deposed.
-			recipients := s.peers.Except(s.id)
+			recipients := s.configuration.Except(s.id)
 
 			// Special case: network of 1
 			if len(recipients) <= 0 {

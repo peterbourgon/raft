@@ -21,21 +21,28 @@ func init() {
 	log.SetFlags(log.Lmicroseconds)
 }
 
+func noop(uint64, []byte) []byte {
+	return []byte{}
+}
+
 func TestFollowerToCandidate(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
 	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
 	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(raft.MakePeers(nonresponsivePeer(2), nonresponsivePeer(3)))
+	server.Start()
+	defer server.Stop()
+
+	injectConfig(t, server, raft.MakePeers(
+		raft.NewLocalPeer(server),
+		nonresponsivePeer(2),
+		nonresponsivePeer(3),
+	))
 	if server.State() != raft.Follower {
 		t.Fatalf("didn't start as Follower")
 	}
-
-	server.Start()
-	defer func() { server.Stop(); t.Logf("server stopped") }()
 
 	time.Sleep(raft.MaximumElectionTimeout())
 
@@ -61,12 +68,15 @@ func TestCandidateToLeader(t *testing.T) {
 	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
 	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(raft.MakePeers(nonresponsivePeer(1), approvingPeer(2), nonresponsivePeer(3)))
 	server.Start()
-	defer func() { server.Stop(); t.Logf("server stopped") }()
+	defer server.Stop()
 
+	injectConfig(t, server, raft.MakePeers(
+		raft.NewLocalPeer(server),
+		approvingPeer(2),
+		nonresponsivePeer(3),
+	))
 	time.Sleep(raft.MaximumElectionTimeout())
 
 	cutoff := time.Now().Add(2 * raft.MaximumElectionTimeout())
@@ -91,13 +101,17 @@ func TestFailedElection(t *testing.T) {
 	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
 	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
 
-	noop := func([]byte) ([]byte, error) { return []byte{}, nil }
 	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(raft.MakePeers(disapprovingPeer(2), nonresponsivePeer(3)))
 	server.Start()
-	defer func() { server.Stop(); t.Logf("server stopped") }()
+	defer server.Stop()
 
+	injectConfig(t, server, raft.MakePeers(
+		raft.NewLocalPeer(server),
+		disapprovingPeer(2),
+		nonresponsivePeer(3),
+	))
 	time.Sleep(2 * raft.ElectionTimeout())
+
 	if server.State() == raft.Leader {
 		t.Fatalf("erroneously became Leader")
 	}
@@ -118,14 +132,18 @@ func TestSimpleConsensus(t *testing.T) {
 
 	var i1, i2, i3 int32
 
-	applyValue := func(id uint64, i *int32) func([]byte) ([]byte, error) {
-		return func(cmd []byte) ([]byte, error) {
+	applyValue := func(id uint64, i *int32) func(uint64, []byte) []byte {
+		return func(index uint64, cmd []byte) []byte {
 			var sv SetValue
 			if err := json.Unmarshal(cmd, &sv); err != nil {
-				return []byte{}, err
+				var buf bytes.Buffer
+				json.NewEncoder(&buf).Encode(map[string]interface{}{"error": err.Error()})
+				return buf.Bytes()
 			}
 			atomic.StoreInt32(i, sv.Value)
-			return json.Marshal(map[string]interface{}{"applied_to_server": id, "applied_value": sv.Value})
+			var buf bytes.Buffer
+			json.NewEncoder(&buf).Encode(map[string]interface{}{"applied_to_server": id, "applied_value": sv.Value})
+			return buf.Bytes()
 		}
 	}
 
@@ -146,16 +164,16 @@ func TestSimpleConsensus(t *testing.T) {
 		raft.NewLocalPeer(s3),
 	)
 
-	s1.SetPeers(peers)
-	s2.SetPeers(peers)
-	s3.SetPeers(peers)
-
 	s1.Start()
 	s2.Start()
 	s3.Start()
 	defer s1.Stop()
 	defer s2.Stop()
 	defer s3.Stop()
+
+	injectConfig(t, s1, peers)
+	injectConfig(t, s2, peers)
+	injectConfig(t, s3, peers)
 
 	var v int32 = 42
 	cmd, _ := json.Marshal(SetValue{v})
@@ -253,12 +271,14 @@ func testOrder(t *testing.T, nServers int) {
 	type recv struct {
 		Recv int `json:"recv"`
 	}
-	do := func(sb *synchronizedBuffer) func(buf []byte) ([]byte, error) {
-		return func(buf []byte) ([]byte, error) {
-			sb.Write(buf)                           // write incoming message
-			var s send                              // decode incoming message
-			json.Unmarshal(buf, &s)                 // ...
-			return json.Marshal(recv{Recv: s.Send}) // write outgoing message
+	do := func(sb *synchronizedBuffer) func(uint64, []byte) []byte {
+		return func(index uint64, cmd []byte) []byte {
+			sb.Write(cmd) // write incoming message
+			var s send    // decode incoming message
+			json.Unmarshal(cmd, &s)
+			var buf bytes.Buffer
+			json.NewEncoder(&buf).Encode(recv{Recv: s.Send})
+			return buf.Bytes() // write outgoing message
 		}
 	}
 
@@ -274,9 +294,6 @@ func testOrder(t *testing.T, nServers int) {
 	peers := raft.Peers{}
 	for _, server := range servers {
 		peers[server.Id()] = raft.NewLocalPeer(server)
-	}
-	for _, server := range servers {
-		server.SetPeers(peers)
 	}
 
 	// define cmds
@@ -301,37 +318,49 @@ func testOrder(t *testing.T, nServers int) {
 		}(server)
 	}
 
+	// inject configurations
+	for _, server := range servers {
+		injectConfig(t, server, peers)
+	}
+
 	// send commands
 	for i, cmd := range cmds {
 		id := uint64(rand.Intn(nServers)) + 1
 		peer := peers[id]
 		buf, _ := json.Marshal(cmd)
-		response := make(chan []byte, 1)
-	retry:
+
 		for {
 			log.Printf("command=%d/%d peer=%d: sending %s", i+1, len(cmds), id, buf)
-			switch err := peer.Command(buf, response); err {
+			response := make(chan []byte, 1)
+			err := peer.Command(buf, response)
+
+			switch err {
 			case nil:
 				log.Printf("command=%d/%d peer=%d: OK", i+1, len(cmds), id)
-				break retry
+				break
+
 			case raft.ErrUnknownLeader, raft.ErrDeposed:
 				log.Printf("command=%d/%d peer=%d: failed (%s) -- will retry", i+1, len(cmds), id, err)
 				time.Sleep(raft.ElectionTimeout())
 				continue
+
 			case raft.ErrTimeout:
 				log.Printf("command=%d/%d peer=%d: timed out -- assume it went through", i+1, len(cmds), id)
-				break retry
+				break
+
 			default:
 				t.Fatalf("command=%d/%d peer=%d: failed (%s) -- fatal", i+1, len(cmds), id, err)
 			}
+
+			r, ok := <-response
+			if !ok {
+				log.Printf("command=%d/%d peer=%d: truncated, will retry", i+1, len(cmds), id)
+				continue
+			}
+
+			log.Printf("command=%d/%d peer=%d: OK, got response %s", i+1, len(cmds), id, string(r))
+			break
 		}
-		r, ok := <-response
-		if !ok {
-			log.Printf("command=%d/%d peer=%d: truncated, will retry", i+1, len(cmds), id)
-			response = make(chan []byte, 1) // channel was closed, must re-make
-			goto retry
-		}
-		log.Printf("command=%d/%d peer=%d: OK, got response %s", i+1, len(cmds), id, string(r))
 	}
 
 	// done sending
@@ -359,6 +388,17 @@ func testOrder(t *testing.T, nServers int) {
 //
 //
 //
+
+func injectConfig(t *testing.T, s *raft.Server, p raft.Peers) {
+	for {
+		if err := s.Configuration(p); err != nil {
+			t.Logf("server %d: Configuration(): %s (will retry)", s.Id(), err)
+			time.Sleep(raft.BroadcastInterval())
+			continue
+		}
+		return
+	}
+}
 
 func printOnFailure(t *testing.T, r io.Reader) {
 	if !t.Failed() {
@@ -403,6 +443,15 @@ func (p nonresponsivePeer) RequestVote(raft.RequestVote) raft.RequestVoteRespons
 func (p nonresponsivePeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
+func (p nonresponsivePeer) Configuration(raft.Peers) error {
+	return fmt.Errorf("not implemented")
+}
+func (p nonresponsivePeer) MarshalJSON() ([]byte, error) {
+	return []byte{}, fmt.Errorf("not implemented")
+}
+func (p nonresponsivePeer) UnmarshalJSON([]byte) error {
+	return fmt.Errorf("not implemented")
+}
 
 type approvingPeer uint64
 
@@ -419,6 +468,15 @@ func (p approvingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteResponse
 func (p approvingPeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
+func (p approvingPeer) Configuration(raft.Peers) error {
+	return fmt.Errorf("not implemented")
+}
+func (p approvingPeer) MarshalJSON() ([]byte, error) {
+	return []byte{}, fmt.Errorf("not implemented")
+}
+func (p approvingPeer) UnmarshalJSON([]byte) error {
+	return fmt.Errorf("not implemented")
+}
 
 type disapprovingPeer uint64
 
@@ -433,5 +491,14 @@ func (p disapprovingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteRespo
 	}
 }
 func (p disapprovingPeer) Command([]byte, chan []byte) error {
+	return fmt.Errorf("not implemented")
+}
+func (p disapprovingPeer) Configuration(raft.Peers) error {
+	return fmt.Errorf("not implemented")
+}
+func (p disapprovingPeer) MarshalJSON() ([]byte, error) {
+	return []byte{}, fmt.Errorf("not implemented")
+}
+func (p disapprovingPeer) UnmarshalJSON([]byte) error {
 	return fmt.Errorf("not implemented")
 }

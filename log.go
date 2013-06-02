@@ -1,7 +1,7 @@
 package raft
 
 import (
-	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -26,10 +26,10 @@ type Log struct {
 	store     io.Writer
 	entries   []LogEntry
 	commitPos int
-	apply     func([]byte) ([]byte, error)
+	apply     func(uint64, []byte) []byte
 }
 
-func NewLog(store io.ReadWriter, apply func([]byte) ([]byte, error)) *Log {
+func NewLog(store io.ReadWriter, apply func(uint64, []byte) []byte) *Log {
 	l := &Log{
 		store:     store,
 		entries:   []LogEntry{},
@@ -48,12 +48,14 @@ func (l *Log) recover(r io.Reader) error {
 		switch err := entry.decode(r); err {
 		case io.EOF:
 			return nil // successful completion
-		default:
-			return err // unsuccessful completion
 		case nil:
-			if err = l.appendEntry(entry); err != nil {
+			if err := l.appendEntry(entry); err != nil {
 				return err
 			}
+			l.commitPos++
+			l.apply(entry.Index, entry.Command)
+		default:
+			return err // unsuccessful completion
 		}
 	}
 }
@@ -321,16 +323,13 @@ func (l *Log) commitTo(commitIndex uint64) error {
 		}
 
 		// Apply the entry's command to our state machine.
-		resp, err := l.apply(l.entries[pos].Command)
-		if err != nil {
-			return err
-		}
+		resp := l.apply(l.entries[pos].Index, l.entries[pos].Command)
 
 		// Transmit the response to waiting client, if applicable.
 		if l.entries[pos].commandResponse != nil {
 			select {
-			case l.entries[pos].commandResponse <- resp: // TODO could `go` this
-				//
+			case l.entries[pos].commandResponse <- resp:
+				break
 			case <-time.After(BroadcastInterval()): // << ElectionInterval
 				panic("uncoöperative command response receiver")
 			}
@@ -370,6 +369,15 @@ type LogEntry struct {
 }
 
 // encode serializes the log entry to the passed io.Writer.
+//
+// Entries are serialized in a simple binary format:
+//
+//		 ---------------------------------------------
+//		| uint32 | uint64 | uint64 | uint32 | []byte  |
+//		 ---------------------------------------------
+//		| CRC    | TERM   | INDEX  | SIZE   | COMMAND |
+//		 ---------------------------------------------
+//
 func (e *LogEntry) encode(w io.Writer) error {
 	if len(e.Command) <= 0 {
 		return ErrNoCommand
@@ -381,59 +389,51 @@ func (e *LogEntry) encode(w io.Writer) error {
 		return ErrBadTerm
 	}
 
-	buf := &bytes.Buffer{}
-	if _, err := fmt.Fprintf(buf, "%016x %016x %s\n", e.Index, e.Term, e.Command); err != nil {
-		return err
-	}
+	commandSize := len(e.Command)
+	buf := make([]byte, 24+commandSize)
 
-	checksum := crc32.ChecksumIEEE(buf.Bytes())
-	_, err := fmt.Fprintf(w, "%08x %s", checksum, buf.String())
+	binary.LittleEndian.PutUint64(buf[4:12], e.Term)
+	binary.LittleEndian.PutUint64(buf[12:20], e.Index)
+	binary.LittleEndian.PutUint32(buf[20:24], uint32(commandSize))
+
+	copy(buf[24:], e.Command)
+
+	binary.LittleEndian.PutUint32(
+		buf[0:4],
+		crc32.ChecksumIEEE(buf[4:]),
+	)
+
+	_, err := w.Write(buf)
 	return err
 }
 
 // decode deserializes one log entry from the passed io.Reader.
 func (e *LogEntry) decode(r io.Reader) error {
-	var readChecksum uint32
-	if _, err := fmt.Fscanf(r, "%08x ", &readChecksum); err != nil {
+	header := make([]byte, 24)
+
+	if _, err := r.Read(header); err != nil {
 		return err
 	}
 
-	if _, err := fmt.Fscanf(r, "%016x ", &e.Index); err != nil {
+	command := make([]byte, binary.LittleEndian.Uint32(header[20:24]))
+
+	if _, err := r.Read(command); err != nil {
 		return err
 	}
 
-	if _, err := fmt.Fscanf(r, "%016x ", &e.Term); err != nil {
-		return err
-	}
+	crc := binary.LittleEndian.Uint32(header[:4])
 
-	if err := consumeUntil(r, '\n', &e.Command); err != nil {
-		return err
-	}
+	check := crc32.NewIEEE()
+	check.Write(header[4:])
+	check.Write(command)
 
-	b := fmt.Sprintf("%016x %016x %s\n", e.Index, e.Term, e.Command)
-	computedChecksum := crc32.ChecksumIEEE([]byte(b))
-	if computedChecksum != readChecksum {
+	if crc != check.Sum32() {
 		return ErrInvalidChecksum
 	}
 
-	return nil
-}
+	e.Term = binary.LittleEndian.Uint64(header[4:12])
+	e.Index = binary.LittleEndian.Uint64(header[12:20])
+	e.Command = command
 
-// consumeUntil does a series of 1-byte Reads from the passed io.Reader
-// until it reaches delim, or EOF. This is pretty inefficient.
-func consumeUntil(r io.Reader, delim byte, dst *[]byte) error {
-	p := make([]byte, 1)
-	for {
-		n, err := r.Read(p)
-		if err != nil {
-			return err
-		}
-		if n != 1 {
-			return io.ErrUnexpectedEOF
-		}
-		if p[0] == delim {
-			return nil
-		}
-		*dst = append(*dst, p[0])
-	}
+	return nil
 }
