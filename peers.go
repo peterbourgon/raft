@@ -48,7 +48,7 @@ func (p *LocalPeer) Command(cmd []byte, response chan []byte) error {
 // requestVoteTimeout issues the RequestVote to the given peer.
 // If no response is received before timeout, an error is returned.
 func requestVoteTimeout(p Peer, rv RequestVote, timeout time.Duration) (RequestVoteResponse, error) {
-	c := make(chan RequestVoteResponse)
+	c := make(chan RequestVoteResponse, 1)
 	go func() { c <- p.RequestVote(rv) }()
 
 	select {
