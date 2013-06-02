@@ -14,7 +14,7 @@ It's heavily influenced by [benbjohnson's implementation][goraft].
 * ~~HTTP transport~~ _done_
 * [net/rpc][netrpc] transport
 * Other transports?
-* Configuration changes (joint-consensus mode)
+* Configuration changes (joint-consensus mode) ☜ **next up**
 * Log compaction
 * Complex unit tests (one per scenario described in the paper)
 
