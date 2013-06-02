@@ -35,7 +35,7 @@ var (
 	ErrAppendEntriesRejected = errors.New("AppendEntries RPC rejected")
 	ErrReplicationFailed     = errors.New("command replication failed (but will keep retrying)")
 	ErrOutOfSync             = errors.New("out of sync")
-	ErrNotRunning            = errors.New("not running")
+	ErrAlreadyRunning        = errors.New("already running")
 )
 
 // ResetElectionTimeoutMs sets the minimum and maximum election timeouts to the
@@ -132,7 +132,6 @@ type Server struct {
 	appendEntriesChan chan appendEntriesTuple
 	requestVoteChan   chan requestVoteTuple
 	commandChan       chan commandTuple
-	configurationChan chan configurationTuple
 
 	electionTick <-chan time.Time
 	quit         chan chan struct{}
@@ -165,7 +164,6 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 		appendEntriesChan: make(chan appendEntriesTuple),
 		requestVoteChan:   make(chan requestVoteTuple),
 		commandChan:       make(chan commandTuple),
-		configurationChan: make(chan configurationTuple),
 
 		electionTick: nil,
 		quit:         make(chan chan struct{}),
@@ -176,23 +174,16 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 
 func (s *Server) Id() uint64 { return s.id }
 
-type configurationTuple struct {
-	Configuration Peers
-	Err           chan error
-}
-
-// Configuration injects the set of peers that this server will attempt to
-// communicate with, in its Raft network. The set peers should include a peer
-// that represents this server, so that quorum is calculated correctly.
-// Configuration should be called after starting the server.
-func (s *Server) Configuration(peers Peers) error {
-	if !s.running.Get() {
-		return ErrNotRunning
+// SetConfiguration sets the peers that this server will attempt to communicate
+// with. The set peers should include a peer that represents this server, so
+// that quorum is calculated correctly. SetConfiguration should be called
+// before starting the server.
+func (s *Server) SetConfiguration(peers Peers) error {
+	if s.running.Get() {
+		return ErrAlreadyRunning
 	}
-
-	err := make(chan error)
-	s.configurationChan <- configurationTuple{peers, err}
-	return <-err
+	s.configuration = peers
+	return nil
 }
 
 // State returns the current state: follower, candidate, or leader.
@@ -331,28 +322,6 @@ func (s *Server) handleQuit(q chan struct{}) {
 	close(q)
 }
 
-func (s *Server) handleConfiguration(t configurationTuple) {
-	if s.configuration.Count() <= 0 {
-		s.logGeneric("loading initial configuration")
-		s.configuration = t.Configuration
-		t.Err <- nil
-		return
-	}
-
-	switch s.leader {
-	case s.id:
-		panic("TODO joint-consensus mode")
-
-	default:
-		leader, ok := s.configuration[s.leader]
-		if !ok {
-			panic("invalid state in peers")
-		}
-		s.logGeneric("got configuration, forwarding to leader (%d)", s.leader)
-		go func() { t.Err <- leader.Configuration(t.Configuration) }()
-	}
-}
-
 func (s *Server) forwardCommand(t commandTuple) {
 	switch s.leader {
 	case unknownLeader:
@@ -375,25 +344,6 @@ func (s *Server) forwardCommand(t commandTuple) {
 	}
 }
 
-func (s *Server) forwardConfiguration(t configurationTuple) {
-	switch s.leader {
-	case unknownLeader:
-		s.logGeneric("got configuration, but don't know leader")
-		t.Err <- ErrUnknownLeader
-
-	case s.id: // I am the leader
-		panic("impossible state in forwardConfiguration")
-
-	default:
-		leader, ok := s.configuration[s.leader]
-		if !ok {
-			panic("invalid state in peers")
-		}
-		s.logGeneric("got configuration, forwarding to leader (%d)", s.leader)
-		go func() { t.Err <- leader.Configuration(t.Configuration) }()
-	}
-}
-
 func (s *Server) followerSelect() {
 	for {
 		select {
@@ -403,9 +353,6 @@ func (s *Server) followerSelect() {
 
 		case t := <-s.commandChan:
 			s.forwardCommand(t)
-
-		case t := <-s.configurationChan:
-			s.handleConfiguration(t)
 
 		case <-s.electionTick:
 			// 5.2 Leader election: "A follower increments its current term and
@@ -500,9 +447,6 @@ func (s *Server) candidateSelect() {
 
 		case t := <-s.commandChan:
 			s.forwardCommand(t)
-
-		case t := <-s.configurationChan:
-			s.handleConfiguration(t)
 
 		case r := <-responses:
 			s.logGeneric("got vote: term=%d granted=%v", r.Term, r.VoteGranted)
@@ -782,9 +726,6 @@ func (s *Server) leaderSelect() {
 		case q := <-s.quit:
 			s.handleQuit(q)
 			return
-
-		case t := <-s.configurationChan:
-			s.handleConfiguration(t)
 
 		case t := <-s.commandChan:
 			// Append the command to our (leader) log
