@@ -80,37 +80,37 @@ func BroadcastInterval() time.Duration {
 	return time.Duration(d) * time.Millisecond
 }
 
-// serverState is just a string protected by a mutex.
-type serverState struct {
+// protectedString is just a string protected by a mutex.
+type protectedString struct {
 	sync.RWMutex
 	value string
 }
 
-func (s *serverState) Get() string {
+func (s *protectedString) Get() string {
 	s.RLock()
 	defer s.RUnlock()
 	return s.value
 }
 
-func (s *serverState) Set(value string) {
+func (s *protectedString) Set(value string) {
 	s.Lock()
 	defer s.Unlock()
 	s.value = value
 }
 
-// serverRunning is just a bool protected by a mutex.
-type serverRunning struct {
+// protectedBool is just a bool protected by a mutex.
+type protectedBool struct {
 	sync.RWMutex
 	value bool
 }
 
-func (s *serverRunning) Get() bool {
+func (s *protectedBool) Get() bool {
 	s.RLock()
 	defer s.RUnlock()
 	return s.value
 }
 
-func (s *serverRunning) Set(value bool) {
+func (s *protectedBool) Set(value bool) {
 	s.Lock()
 	defer s.Unlock()
 	s.value = value
@@ -121,8 +121,8 @@ func (s *serverRunning) Set(value bool) {
 // the distributed state machine will contain a server component.
 type Server struct {
 	id            uint64 // id of this server
-	state         *serverState
-	running       *serverRunning
+	state         *protectedString
+	running       *protectedBool
 	leader        uint64 // who we believe is the leader
 	term          uint64 // "current term number, which increases monotonically"
 	vote          uint64 // who we voted for this term, if applicable
@@ -154,8 +154,8 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 
 	s := &Server{
 		id:            id,
-		state:         &serverState{value: Follower}, // "when servers start up they begin as followers"
-		running:       &serverRunning{value: false},
+		state:         &protectedString{value: Follower}, // "when servers start up they begin as followers"
+		running:       &protectedBool{value: false},
 		leader:        unknownLeader, // unknown at startup
 		log:           log,
 		term:          latestTerm,

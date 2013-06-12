@@ -10,7 +10,7 @@ func TestFollowerAllegiance(t *testing.T) {
 	s := Server{
 		id:     1,
 		term:   5,
-		state:  &serverState{value: Follower},
+		state:  &protectedString{value: Follower},
 		leader: 2,
 		log:    NewLog(&bytes.Buffer{}, noop),
 	}
@@ -35,7 +35,7 @@ func TestStrongLeader(t *testing.T) {
 	s := Server{
 		id:     1,
 		term:   2,
-		state:  &serverState{value: Leader},
+		state:  &protectedString{value: Leader},
 		leader: 1,
 		log:    NewLog(&bytes.Buffer{}, noop),
 	}
@@ -88,7 +88,7 @@ func TestLenientCommit(t *testing.T) {
 		term:   2,
 		leader: 101,
 		log:    log,
-		state:  &serverState{value: Follower},
+		state:  &protectedString{value: Follower},
 	}
 
 	// a leader attempts to AppendEntries with PrevLogIndex=5 CommitIndex=4
