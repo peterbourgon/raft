@@ -23,7 +23,7 @@ type Configuration struct { stable, unstable Peers }
 
 > **2** The joint consensus combines both the old and new configurations:
 
-> (2a) Log entries are replicated to all servers in both configurations.
+> **2a** Log entries are replicated to all servers in both configurations.
 
 Being in the unstable Cold,new state means sending requests to a union-set of
 Cold and Cnew servers.
@@ -33,12 +33,12 @@ func (c *Configuration) AllPeers() Peers { /* union-set */ }
 ```
 
 
-> (2b) Any server from either configuration may serve as leader.
+> **2b** Any server from either configuration may serve as leader.
 
-(statement of fact)
+_statement of fact_
 
 
-> (2c) Agreement (for elections and entry commitment) requires majorities from
+> **2c** Agreement (for elections and entry commitment) requires majorities from
 > both the old and new configurations.
 
 Being in the unstable Cold,new state means changes must be independently
@@ -63,7 +63,7 @@ leader, for the purposes of vote-counting.
 > transition between configurations at different times without compromising
 > safety.
 
-(statement of promise)
+_statement of promise_
 
 
 > **4** Furthermore, joint consensus allows the cluster to continue servicing
@@ -114,19 +114,19 @@ Assuming it's not already in an unstable state (reject otherwise).
 > **9** If the leader crashes, a new leader may be chosen under either Cold or
 > Cold,new, depending on whether the winning candidate has received Cold,new.
 
-(statement of fact)
+_statement of fact_
 
 
 > **10** In any case, Cnew cannot make unilateral decisions during this period.
 
-(statement of fact)
+_statement of fact_
 
 
 > **11** Once Cold,new has been committed, neither Cold nor Cnew can make
 > decisions without approval of the other, and the Leader Log Property ensures
 > that only servers with the Cold,new log entry can be elected as leader.
 
-(statement of fact)
+_statement of fact_
 
 
 > **12** It is now safe for the leader to create a log entry describing Cnew and
@@ -143,7 +143,7 @@ leader Configuration.
 > **13** Again, this configuration will take effect on each server as soon as it
 > is seen.
 
-(statement of fact)
+_statement of fact_
 
 
 > **14** When the new configuration has been committed under the rules of Cnew,
@@ -160,18 +160,18 @@ Implementation: special case in custom apply().
 > **15** As shown in Figure 9, there is no time when Cold and Cnew can both make
 > unilateral decisions; this guarantees safety.
 
-(statement of fact)
+_statement of fact_
 
 
 > **16** There are two more issues to address for reconfiguration.
 
-(statement of promise)
+_statement of promise_
 
 
 > **17** First, if the leader is part of Cold but not part of Cnew, it must
 > eventually step down.
 
-(prefix of 18)
+_prefix of 18_
 
 
 > **18** In Raft the leader steps down immediately after committing a
@@ -195,20 +195,20 @@ counting majorities for a [Cnew] state that doesn't include them.
 > **20** The leader should not step down earlier, because members not in Cnew
 > could still be elected, resulting in unnecessary elections.
 
-(statment of fact)
+_statement of fact_
 
 
 > **21** The second issue is that new servers may not initially store any log
 > entries.
 
-(statement of fact)
+_statement of fact_
 
 
 > **22** If they are added to the cluster in this state, it could take quite a
 > while for them to catch up, during which time it might not be possible to
 > commit new log entries.
 
-(statement of fact)
+_statement of fact_
 
 
 > **23** In order to avoid availability gaps, Raft introduces an additional
