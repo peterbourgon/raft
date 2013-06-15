@@ -3,6 +3,7 @@ package raft
 import (
 	"bytes"
 	"encoding/gob"
+	"fmt"
 	"math"
 	"strings"
 	"sync/atomic"
@@ -441,7 +442,41 @@ func TestCorruptedLogRecovery(t *testing.T) {
 }
 
 func TestConfigurationDecode(t *testing.T) {
-	// TODO
+	expectedPeers := Peers{
+		1: serializablePeer{1, "one"},
+		2: serializablePeer{2, "two"},
+	}
+
+	var i int32
+	cfg := func(gotPeers Peers) error {
+		for id := range expectedPeers {
+			if expected, got := expectedPeers[id], gotPeers[id]; expected != got {
+				return fmt.Errorf("cfg: %d: expected %v, got %v", id, expected, got)
+			}
+		}
+		atomic.AddInt32(&i, 1)
+		return nil
+	}
+
+	buf := &bytes.Buffer{}
+	log := NewLog(buf, noop, cfg)
+
+	peersBuf := &bytes.Buffer{}
+	gob.Register(serializablePeer{})
+	if err := gob.NewEncoder(peersBuf).Encode(expectedPeers); err != nil {
+		t.Fatal(err)
+	}
+	log.appendEntry(LogEntry{
+		Index:           1,
+		Term:            1,
+		Command:         peersBuf.Bytes(),
+		isConfiguration: true,
+	})
+	log.commitTo(log.lastIndex())
+
+	if i != 1 {
+		t.Fatalf("'cfg' wasn't called; no check was made")
+	}
 }
 
 func TestLogConfigurationFlag(t *testing.T) {
@@ -478,6 +513,7 @@ func TestLogConfigurationFlag(t *testing.T) {
 	if cfgCount != 0 {
 		t.Fatalf("config improperly incremented")
 	}
+
 	peers := Peers{}
 	peersBuf := &bytes.Buffer{}
 	if err := gob.NewEncoder(peersBuf).Encode(peers); err != nil {
@@ -496,4 +532,23 @@ func TestLogConfigurationFlag(t *testing.T) {
 	if cfgCount != 1 {
 		t.Fatalf("config failed to register")
 	}
+}
+
+type serializablePeer struct {
+	MyId uint64
+	Err  string
+}
+
+func (p serializablePeer) Id() uint64 { return p.MyId }
+func (p serializablePeer) AppendEntries(AppendEntries) AppendEntriesResponse {
+	return AppendEntriesResponse{}
+}
+func (p serializablePeer) RequestVote(rv RequestVote) RequestVoteResponse {
+	return RequestVoteResponse{}
+}
+func (p serializablePeer) Command([]byte, chan []byte) error {
+	return fmt.Errorf("%s", p.Err)
+}
+func (p serializablePeer) SetConfiguration(Peers) error {
+	return fmt.Errorf("%s", p.Err)
 }
