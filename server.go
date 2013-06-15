@@ -455,22 +455,22 @@ func (s *Server) candidateSelect() {
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
 
-	// TODO fix every AllPeers() callsite -- need some special logic on those
-	responses, canceler := s.configuration.AllPeers().Except(s.id).requestVotes(RequestVote{
+	tuples, canceler := s.configuration.AllPeers().Except(s.id).requestVotes(RequestVote{
 		Term:         s.term,
 		CandidateId:  s.id,
 		LastLogIndex: s.log.lastIndex(),
 		LastLogTerm:  s.log.lastTerm(),
 	})
 	defer canceler.Cancel()
-	s.vote = s.id      // vote for myself
-	votesReceived := 1 // already have a vote from myself
-	votesRequired := s.configuration.AllPeers().Quorum()
-	s.logGeneric("term=%d election started, %d vote(s) required", s.term, votesRequired)
 
-	// catch a bad state
-	if votesReceived >= votesRequired {
-		s.logGeneric("%d-node cluster; I win", s.configuration.AllPeers().Count())
+	// Set up vote tallies (plus, vote for myself)
+	votes := map[uint64]bool{s.id: true}
+	s.vote = s.id
+	s.logGeneric("term=%d election started (configuration state %s)", s.term, s.configuration.state)
+
+	// catch a weird state
+	if s.configuration.Pass(votes) {
+		s.logGeneric("I immediately won the election")
 		s.leader = s.id
 		s.state.Set(Leader)
 		s.vote = noVote
@@ -492,27 +492,28 @@ func (s *Server) candidateSelect() {
 		case t := <-s.configurationChan:
 			s.forwardConfiguration(t)
 
-		case r := <-responses:
-			s.logGeneric("got vote: term=%d granted=%v", r.Term, r.VoteGranted)
+		case t := <-tuples:
+			s.logGeneric("got vote: id=%d term=%d granted=%v", t.id, t.rvr.Term, t.rvr.VoteGranted)
 			// "A candidate wins the election if it receives votes from a
 			// majority of servers in the full cluster for the same term."
-			if r.Term > s.term {
-				s.logGeneric("got future term (%d>%d); abandoning election", r.Term, s.term)
+			if t.rvr.Term > s.term {
+				s.logGeneric("got vote from future term (%d>%d); abandoning election", t.rvr.Term, s.term)
 				s.leader = unknownLeader
 				s.state.Set(Follower)
 				s.vote = noVote
 				return // lose
 			}
-			if r.Term < s.term {
-				s.logGeneric("got vote from past term (%d<%d); ignoring", r.Term, s.term)
+			if t.rvr.Term < s.term {
+				s.logGeneric("got vote from past term (%d<%d); ignoring", t.rvr.Term, s.term)
 				break
 			}
-			if r.VoteGranted {
-				votesReceived++
+			if t.rvr.VoteGranted {
+				s.logGeneric("%d voted for me", t.id)
+				votes[t.id] = true
 			}
 			// "Once a candidate wins an election, it becomes leader."
-			if votesReceived >= votesRequired {
-				s.logGeneric("%d >= %d: win", votesReceived, votesRequired)
+			if s.configuration.Pass(votes) {
+				s.logGeneric("I won the election")
 				s.leader = s.id
 				s.state.Set(Leader)
 				s.vote = noVote

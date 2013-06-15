@@ -106,7 +106,7 @@ func (p Peers) Quorum() int {
 // that don't respond within the timeout are retried forever. The retry loop
 // stops only when all peers have responded, or a Cancel signal is sent via the
 // returned Canceler.
-func (p Peers) requestVotes(r RequestVote) (chan RequestVoteResponse, canceler) {
+func (p Peers) requestVotes(r RequestVote) (chan voteResponseTuple, canceler) {
 	// "[A server entering the candidate stage] issues RequestVote RPCs in
 	// parallel to each of the other servers in the cluster. If the candidate
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
@@ -114,14 +114,7 @@ func (p Peers) requestVotes(r RequestVote) (chan RequestVoteResponse, canceler) 
 
 	// construct the channels we'll return
 	abortChan := make(chan struct{})
-	responsesChan := make(chan RequestVoteResponse)
-
-	// compact a peer.RequestVote response to a single struct
-	type tuple struct {
-		Id                  uint64
-		RequestVoteResponse RequestVoteResponse
-		Err                 error
-	}
+	tupleChan := make(chan voteResponseTuple)
 
 	go func() {
 		// We loop until all Peers have given us a response.
@@ -135,23 +128,24 @@ func (p Peers) requestVotes(r RequestVote) (chan RequestVoteResponse, canceler) 
 			}
 
 			// scatter
-			tupleChan := make(chan tuple, len(notYetResponded))
+			tupleChan0 := make(chan voteResponseTuple, len(notYetResponded))
 			for id, peer := range notYetResponded {
 				go func(id0 uint64, peer0 Peer) {
 					resp, err := requestVoteTimeout(peer0, r, 2*BroadcastInterval())
-					tupleChan <- tuple{id0, resp, err}
+					tupleChan0 <- voteResponseTuple{id0, resp, err}
 				}(id, peer)
 			}
 
 			// gather
-			for i := 0; i < len(notYetResponded); i++ {
+			for i := 0; i < cap(tupleChan0); i++ {
 				select {
-				case t := <-tupleChan:
-					if t.Err != nil {
+				case t := <-tupleChan0:
+					if t.err != nil {
 						continue // will need to retry
 					}
-					respondedAlready[t.Id] = nil           // value irrelevant
-					responsesChan <- t.RequestVoteResponse // forward the vote
+					respondedAlready[t.id] = nil // set membership semantics
+					tupleChan <- t
+
 				case <-abortChan:
 					return // give up
 				}
@@ -159,7 +153,13 @@ func (p Peers) requestVotes(r RequestVote) (chan RequestVoteResponse, canceler) 
 		}
 	}()
 
-	return responsesChan, cancel(abortChan)
+	return tupleChan, cancel(abortChan)
+}
+
+type voteResponseTuple struct {
+	id  uint64
+	rvr RequestVoteResponse
+	err error
 }
 
 type canceler interface {
