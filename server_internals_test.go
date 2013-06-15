@@ -12,7 +12,7 @@ func TestFollowerAllegiance(t *testing.T) {
 		term:   5,
 		state:  &protectedString{value: Follower},
 		leader: 2,
-		log:    NewLog(&bytes.Buffer{}, noop),
+		log:    NewLog(&bytes.Buffer{}, noop, nocfg),
 	}
 
 	// receives an AppendEntries from a future term and different leader
@@ -37,7 +37,7 @@ func TestStrongLeader(t *testing.T) {
 		term:   2,
 		state:  &protectedString{value: Leader},
 		leader: 1,
-		log:    NewLog(&bytes.Buffer{}, noop),
+		log:    NewLog(&bytes.Buffer{}, noop, nocfg),
 	}
 
 	// receives a RequestVote from someone also in term=2
@@ -91,7 +91,7 @@ func TestLenientCommit(t *testing.T) {
 		state:  &protectedString{value: Follower},
 	}
 
-	// a leader attempts to AppendEntries with PrevLogIndex=5 CommitIndex=4
+	// an AppendEntries comes with correct PrevLogIndex but older CommitIndex
 	resp, stepDown := s.handleAppendEntries(AppendEntries{
 		Term:         2,
 		LeaderId:     101,

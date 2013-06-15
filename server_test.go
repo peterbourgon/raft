@@ -429,6 +429,9 @@ func (p nonresponsivePeer) RequestVote(raft.RequestVote) raft.RequestVoteRespons
 func (p nonresponsivePeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
+func (p nonresponsivePeer) SetConfiguration(raft.Peers) error {
+	return fmt.Errorf("not implemented")
+}
 
 type approvingPeer uint64
 
@@ -445,6 +448,9 @@ func (p approvingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteResponse
 func (p approvingPeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
+func (p approvingPeer) SetConfiguration(raft.Peers) error {
+	return fmt.Errorf("not implemented")
+}
 
 type disapprovingPeer uint64
 
@@ -459,5 +465,8 @@ func (p disapprovingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteRespo
 	}
 }
 func (p disapprovingPeer) Command([]byte, chan []byte) error {
+	return fmt.Errorf("not implemented")
+}
+func (p disapprovingPeer) SetConfiguration(raft.Peers) error {
 	return fmt.Errorf("not implemented")
 }

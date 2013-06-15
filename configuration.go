@@ -1,6 +1,8 @@
 package raft
 
 import (
+	"bytes"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"sync"
@@ -28,6 +30,41 @@ func NewConfiguration(peers Peers) *Configuration {
 		state: Old,   // start in a stable state,
 		c_old: peers, // with only C_old
 	}
+}
+
+// DirectSet is used when bootstrapping, and when receiving a replicated
+// configuration from a leader. It directly sets the configuration to the
+// passed peers. It's assumed this is called on a non-leader, and therefore
+// requires no consistency dance.
+func (c *Configuration) DirectSet(peers Peers) error {
+	c.Lock()
+	defer c.Unlock()
+
+	c.c_old = peers
+	c.c_new = Peers{}
+	c.state = Old
+	return nil
+}
+
+func (c *Configuration) Get(id uint64) (Peer, bool) {
+	c.RLock()
+	defer c.RUnlock()
+
+	if peer, ok := c.c_old[id]; ok {
+		return peer, true
+	}
+	if peer, ok := c.c_new[id]; ok {
+		return peer, true
+	}
+	return nil, false
+}
+
+func (c *Configuration) Encode() ([]byte, error) {
+	buf := &bytes.Buffer{}
+	if err := gob.NewEncoder(buf).Encode(c.AllPeers()); err != nil {
+		return []byte{}, err
+	}
+	return buf.Bytes(), nil
 }
 
 // AllPeers returns the union set of all peers in the Configuration.

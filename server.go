@@ -127,11 +127,12 @@ type Server struct {
 	term          uint64 // "current term number, which increases monotonically"
 	vote          uint64 // who we voted for this term, if applicable
 	log           *Log
-	configuration Peers
+	configuration *Configuration
 
 	appendEntriesChan chan appendEntriesTuple
 	requestVoteChan   chan requestVoteTuple
 	commandChan       chan commandTuple
+	configurationChan chan configurationTuple
 
 	electionTick <-chan time.Time
 	quit         chan chan struct{}
@@ -147,9 +148,14 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 		panic("server id must be > 0")
 	}
 
-	log := NewLog(store, apply)
-	// 5.2 Leader election: the latest term this server has seen is persisted,
-	// and is initialized to 0 on first boot.
+	configuration := NewConfiguration(Peers{})
+	applyConfiguration := func(peers Peers) error {
+		return configuration.DirectSet(peers)
+	}
+
+	log := NewLog(store, apply, applyConfiguration)
+	// 5.2 Leader election: "the latest term this server has seen is persisted,
+	// and is initialized to 0 on first boot.""
 	latestTerm := log.lastTerm()
 
 	s := &Server{
@@ -159,11 +165,12 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 		leader:        unknownLeader, // unknown at startup
 		log:           log,
 		term:          latestTerm,
-		configuration: nil,
+		configuration: configuration,
 
 		appendEntriesChan: make(chan appendEntriesTuple),
 		requestVoteChan:   make(chan requestVoteTuple),
 		commandChan:       make(chan commandTuple),
+		configurationChan: make(chan configurationTuple),
 
 		electionTick: nil,
 		quit:         make(chan chan struct{}),
@@ -174,16 +181,26 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 
 func (s *Server) Id() uint64 { return s.id }
 
+type configurationTuple struct {
+	Peers Peers
+	Err   chan error
+}
+
 // SetConfiguration sets the peers that this server will attempt to communicate
 // with. The set peers should include a peer that represents this server, so
-// that quorum is calculated correctly. SetConfiguration should be called
-// before starting the server.
+// that quorum is calculated correctly. SetConfiguration must be called before
+// starting the server.
 func (s *Server) SetConfiguration(peers Peers) error {
-	if s.running.Get() {
-		return ErrAlreadyRunning
+	// Pre-start SetConfiguration are special cased to simply set and return
+	if !s.running.Get() {
+		s.configuration.DirectSet(peers)
+		return nil
 	}
-	s.configuration = peers
-	return nil
+
+	// Post-start SetConfiguration require communication with the leader
+	err := make(chan error)
+	s.configurationChan <- configurationTuple{peers, err}
+	return <-err
 }
 
 // State returns the current state: follower, candidate, or leader.
@@ -332,7 +349,7 @@ func (s *Server) forwardCommand(t commandTuple) {
 		panic("impossible state in forwardCommand")
 
 	default:
-		leader, ok := s.configuration[s.leader]
+		leader, ok := s.configuration.Get(s.leader)
 		if !ok {
 			panic("invalid state in peers")
 		}
@@ -341,6 +358,25 @@ func (s *Server) forwardCommand(t commandTuple) {
 		// receive-command branch. If we continue to block while forwarding
 		// the command, the leader won't be able to get a response from us!
 		go func() { t.Err <- leader.Command(t.Command, t.CommandResponse) }()
+	}
+}
+
+func (s *Server) forwardConfiguration(t configurationTuple) {
+	switch s.leader {
+	case unknownLeader:
+		s.logGeneric("got configuration, but don't know leader")
+		t.Err <- ErrUnknownLeader
+
+	case s.id: // I am the leader
+		panic("impossible state in forwardConfiguration")
+
+	default:
+		leader, ok := s.configuration.Get(s.leader)
+		if !ok {
+			panic("invalid state in peers")
+		}
+		s.logGeneric("got configuration, forwarding to leader (%d)", s.leader)
+		go func() { t.Err <- leader.SetConfiguration(t.Peers) }()
 	}
 }
 
@@ -354,10 +390,13 @@ func (s *Server) followerSelect() {
 		case t := <-s.commandChan:
 			s.forwardCommand(t)
 
+		case t := <-s.configurationChan:
+			s.forwardConfiguration(t)
+
 		case <-s.electionTick:
 			// 5.2 Leader election: "A follower increments its current term and
 			// transitions to candidate state."
-			if s.configuration.Count() <= 0 {
+			if s.configuration == nil {
 				s.logGeneric("election timeout, but no configuration: ignoring")
 				s.resetElectionTimeout()
 				continue
@@ -415,7 +454,9 @@ func (s *Server) candidateSelect() {
 	// parallel to each of the other servers in the cluster. If the candidate
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
-	responses, canceler := s.configuration.Except(s.id).requestVotes(RequestVote{
+
+	// TODO fix every AllPeers() callsite -- need some special logic on those
+	responses, canceler := s.configuration.AllPeers().Except(s.id).requestVotes(RequestVote{
 		Term:         s.term,
 		CandidateId:  s.id,
 		LastLogIndex: s.log.lastIndex(),
@@ -424,12 +465,12 @@ func (s *Server) candidateSelect() {
 	defer canceler.Cancel()
 	s.vote = s.id      // vote for myself
 	votesReceived := 1 // already have a vote from myself
-	votesRequired := s.configuration.Quorum()
+	votesRequired := s.configuration.AllPeers().Quorum()
 	s.logGeneric("term=%d election started, %d vote(s) required", s.term, votesRequired)
 
 	// catch a bad state
 	if votesReceived >= votesRequired {
-		s.logGeneric("%d-node cluster; I win", s.configuration.Count())
+		s.logGeneric("%d-node cluster; I win", s.configuration.AllPeers().Count())
 		s.leader = s.id
 		s.state.Set(Leader)
 		s.vote = noVote
@@ -447,6 +488,9 @@ func (s *Server) candidateSelect() {
 
 		case t := <-s.commandChan:
 			s.forwardCommand(t)
+
+		case t := <-s.configurationChan:
+			s.forwardConfiguration(t)
 
 		case r := <-responses:
 			s.logGeneric("got vote: term=%d granted=%v", r.Term, r.VoteGranted)
@@ -710,7 +754,7 @@ func (s *Server) leaderSelect() {
 	// doing the decrement. This was just annoying, except if you manage to
 	// sneak in a command before the first heartbeat. Then, it will never get
 	// properly replicated (it seemed).
-	ni := newNextIndex(s.configuration.Except(s.id), s.log.lastIndex()) // +1)
+	ni := newNextIndex(s.configuration.AllPeers().Except(s.id), s.log.lastIndex()) // +1)
 
 	flush := make(chan struct{})
 	heartbeat := time.NewTicker(BroadcastInterval())
@@ -741,7 +785,12 @@ func (s *Server) leaderSelect() {
 				t.Err <- err
 				continue
 			}
-			s.logGeneric("after append, commitIndex=%d lastIndex=%d lastTerm=%d", s.log.getCommitIndex(), s.log.lastIndex(), s.log.lastTerm())
+			s.logGeneric(
+				"after append, commitIndex=%d lastIndex=%d lastTerm=%d",
+				s.log.getCommitIndex(),
+				s.log.lastIndex(),
+				s.log.lastTerm(),
+			)
 
 			// Now that the entry is in the log, we can fall back to the
 			// normal flushing mechanism to attempt to replicate the entry
@@ -750,13 +799,50 @@ func (s *Server) leaderSelect() {
 			go func() { flush <- struct{}{} }()
 			t.Err <- nil
 
+		case t := <-s.configurationChan:
+			// Attempt to change our local configuration
+			if err := s.configuration.ChangeTo(t.Peers); err != nil {
+				t.Err <- err
+				continue
+			}
+
+			// Serialize the local (C_old,new) configuration
+			encodedConfiguration, err := s.configuration.Encode()
+			if err != nil {
+				t.Err <- err
+				continue
+			}
+
+			// We're gonna write+replicate that config via log mechanisms.
+			// Prepare the on-commit callback.
+			response := make(chan []byte)
+			go func() {
+				switch n := len(<-response); true {
+				case n > 0: // non-zero-byte response = failure
+					s.configuration.ChangeAborted()
+				default: // zero-byte-response = success
+					s.configuration.ChangeCommitted()
+				}
+			}()
+			entry := LogEntry{
+				Index:           s.log.lastIndex() + 1,
+				Term:            s.term,
+				Command:         encodedConfiguration,
+				commandResponse: response,
+				isConfiguration: true,
+			}
+			if err := s.log.appendEntry(entry); err != nil {
+				t.Err <- err
+				continue
+			}
+
 		case <-flush:
 			// Flushes attempt to sync the follower log with ours.
 			// That requires per-follower state in the form of nextIndex.
 			// After every flush, we check if we can advance our commitIndex.
 			// If so, we do it, and trigger another flush ASAP.
 			// A flush can cause us to be deposed.
-			recipients := s.configuration.Except(s.id)
+			recipients := s.configuration.AllPeers().Except(s.id)
 
 			// Special case: network of 1
 			if len(recipients) <= 0 {
