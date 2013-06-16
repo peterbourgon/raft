@@ -2,6 +2,8 @@ package raft
 
 import (
 	"bytes"
+	"encoding/gob"
+	"fmt"
 	"testing"
 )
 
@@ -12,7 +14,7 @@ func TestFollowerAllegiance(t *testing.T) {
 		term:   5,
 		state:  &protectedString{value: Follower},
 		leader: 2,
-		log:    NewLog(&bytes.Buffer{}, noop, nocfg),
+		log:    NewLog(&bytes.Buffer{}, noop),
 	}
 
 	// receives an AppendEntries from a future term and different leader
@@ -37,7 +39,7 @@ func TestStrongLeader(t *testing.T) {
 		term:   2,
 		state:  &protectedString{value: Leader},
 		leader: 1,
-		log:    NewLog(&bytes.Buffer{}, noop, nocfg),
+		log:    NewLog(&bytes.Buffer{}, noop),
 	}
 
 	// receives a RequestVote from someone also in term=2
@@ -107,4 +109,84 @@ func TestLenientCommit(t *testing.T) {
 	if stepDown {
 		t.Errorf("shouldn't step down")
 	}
+}
+
+func TestConfigurationReceipt(t *testing.T) {
+	// a follower
+	s := Server{
+		id:     2,
+		term:   1,
+		leader: 1,
+		log: &Log{
+			entries:   []LogEntry{LogEntry{Index: 1, Term: 1}},
+			commitPos: 0,
+		},
+		state:         &protectedString{value: Follower},
+		configuration: NewConfiguration(Peers{}),
+	}
+
+	// receives a configuration change
+	peers := Peers{
+		1: serializablePeer{1, "foo"},
+		2: serializablePeer{2, "bar"},
+		3: serializablePeer{3, "baz"},
+	}
+	configurationBuf := &bytes.Buffer{}
+	gob.Register(&serializablePeer{})
+	if err := gob.NewEncoder(configurationBuf).Encode(peers); err != nil {
+		t.Fatal(err)
+	}
+
+	// via an AppendEntries
+	aer, _ := s.handleAppendEntries(AppendEntries{
+		Term:         1,
+		LeaderId:     1,
+		PrevLogIndex: 1,
+		PrevLogTerm:  1,
+		Entries: []LogEntry{
+			LogEntry{
+				Index:           2,
+				Term:            1,
+				Command:         configurationBuf.Bytes(),
+				isConfiguration: true,
+			},
+		},
+		CommitIndex: 1,
+	})
+
+	// it should succeed
+	if !aer.Success {
+		t.Fatalf("AppendEntriesResponse: no success: %s", aer.reason)
+	}
+
+	// and the follower's configuration should be immediately updated
+	if expected, got := 3, s.configuration.AllPeers().Count(); expected != got {
+		t.Fatalf("follower peer count: expected %d, got %d", expected, got)
+	}
+	peer, ok := s.configuration.Get(3)
+	if !ok {
+		t.Fatal("follower didn't get peer 3")
+	}
+	if peer.Id() != 3 {
+		t.Fatal("follower got bad peer 3")
+	}
+}
+
+type serializablePeer struct {
+	MyId uint64
+	Err  string
+}
+
+func (p serializablePeer) Id() uint64 { return p.MyId }
+func (p serializablePeer) AppendEntries(AppendEntries) AppendEntriesResponse {
+	return AppendEntriesResponse{}
+}
+func (p serializablePeer) RequestVote(rv RequestVote) RequestVoteResponse {
+	return RequestVoteResponse{}
+}
+func (p serializablePeer) Command([]byte, chan []byte) error {
+	return fmt.Errorf("%s", p.Err)
+}
+func (p serializablePeer) SetConfiguration(Peers) error {
+	return fmt.Errorf("%s", p.Err)
 }

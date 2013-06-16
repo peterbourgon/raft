@@ -1,6 +1,8 @@
 package raft
 
 import (
+	"bytes"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
@@ -148,14 +150,9 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 		panic("server id must be > 0")
 	}
 
-	configuration := NewConfiguration(Peers{})
-	applyConfiguration := func(peers Peers) error {
-		return configuration.DirectSet(peers)
-	}
-
-	log := NewLog(store, apply, applyConfiguration)
 	// 5.2 Leader election: "the latest term this server has seen is persisted,
 	// and is initialized to 0 on first boot.""
+	log := NewLog(store, apply)
 	latestTerm := log.lastTerm()
 
 	s := &Server{
@@ -165,7 +162,7 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 		leader:        unknownLeader, // unknown at startup
 		log:           log,
 		term:          latestTerm,
-		configuration: configuration,
+		configuration: NewConfiguration(Peers{}),
 
 		appendEntriesChan: make(chan appendEntriesTuple),
 		requestVoteChan:   make(chan requestVoteTuple),
@@ -1044,8 +1041,9 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 		}, stepDown
 	}
 
-	// Append entries to the log
+	// Process the entries
 	for i, entry := range r.Entries {
+		// Append entry to the log
 		if err := s.log.appendEntry(entry); err != nil {
 			return AppendEntriesResponse{
 				Term:    s.term,
@@ -1057,6 +1055,27 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 					err,
 				),
 			}, stepDown
+		}
+
+		// Non-leaders: if we got a configuration change, apply it immediately
+		if s.State() != Leader && entry.isConfiguration {
+			commandBuf := bytes.NewBuffer(entry.Command)
+			var peers Peers
+			if err := gob.NewDecoder(commandBuf).Decode(&peers); err != nil {
+				panic("gob decode of peers failed")
+			}
+			if err := s.configuration.DirectSet(peers); err != nil {
+				return AppendEntriesResponse{
+					Term:    s.term,
+					Success: false,
+					reason: fmt.Sprintf(
+						"AppendEntry %d/%d failed (configuration): %s",
+						i+1,
+						len(r.Entries),
+						err,
+					),
+				}, stepDown
+			}
 		}
 	}
 

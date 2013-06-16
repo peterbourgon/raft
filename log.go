@@ -1,9 +1,7 @@
 package raft
 
 import (
-	"bytes"
 	"encoding/binary"
-	"encoding/gob"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -25,20 +23,18 @@ var (
 
 type Log struct {
 	sync.RWMutex
-	store              io.Writer
-	entries            []LogEntry
-	commitPos          int
-	applyCommand       func(uint64, []byte) []byte
-	applyConfiguration func(Peers) error
+	store     io.Writer
+	entries   []LogEntry
+	commitPos int
+	apply     func(uint64, []byte) []byte
 }
 
-func NewLog(store io.ReadWriter, applyCommand func(uint64, []byte) []byte, applyConfiguration func(Peers) error) *Log {
+func NewLog(store io.ReadWriter, apply func(uint64, []byte) []byte) *Log {
 	l := &Log{
-		store:              store,
-		entries:            []LogEntry{},
-		commitPos:          -1, // no commits to begin with
-		applyCommand:       applyCommand,
-		applyConfiguration: applyConfiguration,
+		store:     store,
+		entries:   []LogEntry{},
+		commitPos: -1, // no commits to begin with
+		apply:     apply,
 	}
 	l.recover(store)
 	return l
@@ -57,7 +53,7 @@ func (l *Log) recover(r io.Reader) error {
 				return err
 			}
 			l.commitPos++
-			l.applyCommand(entry.Index, entry.Command)
+			l.apply(entry.Index, entry.Command)
 		default:
 			return err // unsuccessful completion
 		}
@@ -326,31 +322,22 @@ func (l *Log) commitTo(commitIndex uint64) error {
 			return err
 		}
 
-		// Deal with the body of the log entry
-		var resp []byte
-		if l.entries[pos].isConfiguration {
-			commandBuf := bytes.NewBuffer(l.entries[pos].Command)
-			var peers Peers
-			if err := gob.NewDecoder(commandBuf).Decode(&peers); err != nil {
-				panic("gob decode of peers failed")
-			}
-			if err := l.applyConfiguration(peers); err != nil {
-				resp = []byte(err.Error())
-			}
-		} else {
-			resp = l.applyCommand(l.entries[pos].Index, l.entries[pos].Command)
-		}
+		// Forward non-configuration commands to the state machine
+		if !l.entries[pos].isConfiguration {
+			// Apply the command
+			resp := l.apply(l.entries[pos].Index, l.entries[pos].Command)
 
-		// Transmit the response to waiting client, if applicable.
-		if l.entries[pos].commandResponse != nil {
-			select {
-			case l.entries[pos].commandResponse <- resp:
-				break
-			case <-time.After(BroadcastInterval()): // << ElectionInterval
-				panic("uncoöperative command response receiver")
+			// Transmit the response to waiting client, if applicable.
+			if l.entries[pos].commandResponse != nil {
+				select {
+				case l.entries[pos].commandResponse <- resp:
+					break
+				case <-time.After(BroadcastInterval()): // << ElectionInterval
+					panic("uncoöperative command response receiver")
+				}
+				close(l.entries[pos].commandResponse)
+				l.entries[pos].commandResponse = nil
 			}
-			close(l.entries[pos].commandResponse)
-			l.entries[pos].commandResponse = nil
 		}
 
 		// Mark our commit position cursor.

@@ -2,11 +2,8 @@ package raft
 
 import (
 	"bytes"
-	"encoding/gob"
-	"fmt"
 	"math"
 	"strings"
-	"sync/atomic"
 	"testing"
 )
 
@@ -18,14 +15,10 @@ func noop(uint64, []byte) []byte {
 	return []byte{}
 }
 
-func nocfg(Peers) error {
-	return nil
-}
-
 func TestLogEntriesAfter(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
-	log := NewLog(buf, noop, nocfg)
+	log := NewLog(buf, noop)
 
 	type tuple struct {
 		AfterIndex      uint64
@@ -127,7 +120,7 @@ func TestLogEntryEncodeDecode(t *testing.T) {
 func TestLogAppend(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
-	log := NewLog(buf, noop, nocfg)
+	log := NewLog(buf, noop)
 
 	// Append 3 valid LogEntries
 	if err := log.appendEntry(LogEntry{1, 1, c, oneshot(), false}); err != nil {
@@ -215,7 +208,7 @@ func TestLogAppend(t *testing.T) {
 func TestLogContains(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
-	log := NewLog(buf, noop, nocfg)
+	log := NewLog(buf, noop)
 
 	for _, tuple := range []struct {
 		Index uint64
@@ -259,7 +252,7 @@ func TestLogContains(t *testing.T) {
 func TestLogTruncation(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
-	log := NewLog(buf, noop, nocfg)
+	log := NewLog(buf, noop)
 
 	for _, tuple := range []struct {
 		Index uint64
@@ -307,7 +300,7 @@ func TestLogCommitNoDuplicate(t *testing.T) {
 	// A pathological case: serial commitTo may double-apply the first command
 	hits := 0
 	apply := func(uint64, []byte) []byte { hits++; return []byte{} }
-	log := NewLog(&bytes.Buffer{}, apply, nocfg)
+	log := NewLog(&bytes.Buffer{}, apply)
 
 	log.appendEntry(LogEntry{Index: 1, Term: 1, Command: []byte(`{}`)})
 	log.commitTo(1)
@@ -330,7 +323,7 @@ func TestLogCommitNoDuplicate(t *testing.T) {
 
 func TestLogCommitTwice(t *testing.T) {
 	// A pathological case: commitTo(N) twice in a row should be fine.
-	log := NewLog(&bytes.Buffer{}, noop, nocfg)
+	log := NewLog(&bytes.Buffer{}, noop)
 
 	log.appendEntry(LogEntry{Index: 1, Term: 1, Command: []byte(`{}`)})
 	log.commitTo(1)
@@ -355,7 +348,7 @@ func TestCleanLogRecovery(t *testing.T) {
 	for _, entry := range entries {
 		entry.encode(buf)
 	}
-	log := NewLog(buf, noop, nocfg)
+	log := NewLog(buf, noop)
 
 	if expected, got := len(entries), len(log.entries); expected != got {
 		t.Fatalf("expected %d, got %d", expected, got)
@@ -410,7 +403,7 @@ func TestCorruptedLogRecovery(t *testing.T) {
 		entry.encode(buf)
 	}
 	buf.Write([]byte("garbage"))
-	log := NewLog(buf, noop, nocfg)
+	log := NewLog(buf, noop)
 
 	if expected, got := len(entries), len(log.entries); expected != got {
 		t.Fatalf("expected %d, got %d", expected, got)
@@ -439,116 +432,4 @@ func TestCorruptedLogRecovery(t *testing.T) {
 	if !log.contains(4, 3) {
 		t.Errorf("log doesn't contain index=4 term=3")
 	}
-}
-
-func TestConfigurationDecode(t *testing.T) {
-	expectedPeers := Peers{
-		1: serializablePeer{1, "one"},
-		2: serializablePeer{2, "two"},
-	}
-
-	var i int32
-	cfg := func(gotPeers Peers) error {
-		for id := range expectedPeers {
-			if expected, got := expectedPeers[id], gotPeers[id]; expected != got {
-				return fmt.Errorf("cfg: %d: expected %v, got %v", id, expected, got)
-			}
-		}
-		atomic.AddInt32(&i, 1)
-		return nil
-	}
-
-	buf := &bytes.Buffer{}
-	log := NewLog(buf, noop, cfg)
-
-	peersBuf := &bytes.Buffer{}
-	gob.Register(serializablePeer{})
-	if err := gob.NewEncoder(peersBuf).Encode(expectedPeers); err != nil {
-		t.Fatal(err)
-	}
-	log.appendEntry(LogEntry{
-		Index:           1,
-		Term:            1,
-		Command:         peersBuf.Bytes(),
-		isConfiguration: true,
-	})
-	log.commitTo(log.lastIndex())
-
-	if i != 1 {
-		t.Fatalf("'cfg' wasn't called; no check was made")
-	}
-}
-
-func TestLogConfigurationFlag(t *testing.T) {
-	cmd := func(i *int32) func(uint64, []byte) []byte {
-		return func(index uint64, cmd []byte) []byte {
-			t.Logf("cmd(%d, %v)", index, cmd)
-			atomic.AddInt32(i, 1)
-			return []byte{}
-		}
-	}
-
-	cfg := func(i *int32) func(Peers) error {
-		return func(peers Peers) error {
-			t.Logf("cfg(%v)", peers)
-			atomic.AddInt32(i, 1)
-			return nil
-		}
-	}
-
-	buf := &bytes.Buffer{}
-	var cmdCount, cfgCount int32
-	log := NewLog(buf, cmd(&cmdCount), cfg(&cfgCount))
-
-	log.appendEntry(LogEntry{
-		Index:           1,
-		Term:            1,
-		Command:         []byte(`{}`),
-		isConfiguration: false,
-	})
-	log.commitTo(log.lastIndex())
-	if cmdCount != 1 {
-		t.Fatalf("command failed to register")
-	}
-	if cfgCount != 0 {
-		t.Fatalf("config improperly incremented")
-	}
-
-	peers := Peers{}
-	peersBuf := &bytes.Buffer{}
-	if err := gob.NewEncoder(peersBuf).Encode(peers); err != nil {
-		t.Fatal(err)
-	}
-	log.appendEntry(LogEntry{
-		Index:           2,
-		Term:            1,
-		Command:         peersBuf.Bytes(),
-		isConfiguration: true,
-	})
-	log.commitTo(log.lastIndex())
-	if cmdCount != 1 {
-		t.Fatalf("command improperly incremented")
-	}
-	if cfgCount != 1 {
-		t.Fatalf("config failed to register")
-	}
-}
-
-type serializablePeer struct {
-	MyId uint64
-	Err  string
-}
-
-func (p serializablePeer) Id() uint64 { return p.MyId }
-func (p serializablePeer) AppendEntries(AppendEntries) AppendEntriesResponse {
-	return AppendEntriesResponse{}
-}
-func (p serializablePeer) RequestVote(rv RequestVote) RequestVoteResponse {
-	return RequestVoteResponse{}
-}
-func (p serializablePeer) Command([]byte, chan []byte) error {
-	return fmt.Errorf("%s", p.Err)
-}
-func (p serializablePeer) SetConfiguration(Peers) error {
-	return fmt.Errorf("%s", p.Err)
 }
