@@ -154,6 +154,11 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 				close(l.entries[pos].commandResponse)
 				l.entries[pos].commandResponse = nil
 			}
+			if l.entries[pos].committed != nil {
+				l.entries[pos].committed <- false
+				close(l.entries[pos].committed)
+				l.entries[pos].committed = nil
+			}
 		}
 		l.entries = []LogEntry{}
 		return nil
@@ -196,6 +201,11 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 		if l.entries[pos].commandResponse != nil {
 			close(l.entries[pos].commandResponse)
 			l.entries[pos].commandResponse = nil
+		}
+		if l.entries[pos].committed != nil {
+			l.entries[pos].committed <- false
+			close(l.entries[pos].committed)
+			l.entries[pos].committed = nil
 		}
 	}
 
@@ -322,12 +332,10 @@ func (l *Log) commitTo(commitIndex uint64) error {
 			return err
 		}
 
-		// Forward non-configuration commands to the state machine
+		// Forward non-configuration commands to the state machine.
+		// Send the responses to the waiting client, if applicable.
 		if !l.entries[pos].isConfiguration {
-			// Apply the command
 			resp := l.apply(l.entries[pos].Index, l.entries[pos].Command)
-
-			// Transmit the response to waiting client, if applicable.
 			if l.entries[pos].commandResponse != nil {
 				select {
 				case l.entries[pos].commandResponse <- resp:
@@ -340,6 +348,13 @@ func (l *Log) commitTo(commitIndex uint64) error {
 			}
 		}
 
+		// Signal the entry has been committed, if applicable.
+		if l.entries[pos].committed != nil {
+			l.entries[pos].committed <- true
+			close(l.entries[pos].committed)
+			l.entries[pos].committed = nil
+		}
+
 		// Mark our commit position cursor.
 		l.commitPos = pos
 
@@ -348,7 +363,11 @@ func (l *Log) commitTo(commitIndex uint64) error {
 			break
 		}
 		if l.entries[pos].Index > commitIndex {
-			panic(fmt.Sprintf("current entry Index %d is beyond our desired commitIndex %d", l.entries[pos].Index, commitIndex))
+			panic(fmt.Sprintf(
+				"current entry Index %d is beyond our desired commitIndex %d",
+				l.entries[pos].Index,
+				commitIndex,
+			))
 		}
 
 		// Otherwise, advance!
@@ -368,7 +387,8 @@ type LogEntry struct {
 	Index           uint64      `json:"index"`
 	Term            uint64      `json:"term"` // when received by leader
 	Command         []byte      `json:"command,omitempty"`
-	commandResponse chan []byte `json:"-"` // only present on receiver's log
+	committed       chan bool   `json:"-"`
+	commandResponse chan []byte `json:"-"` // only non-nil on receiver's log
 	isConfiguration bool        `json:"-"` // for configuration change entries
 }
 

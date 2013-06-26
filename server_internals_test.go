@@ -5,6 +5,7 @@ import (
 	"encoding/gob"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestFollowerAllegiance(t *testing.T) {
@@ -169,6 +170,69 @@ func TestConfigurationReceipt(t *testing.T) {
 	}
 	if peer.Id() != 3 {
 		t.Fatal("follower got bad peer 3")
+	}
+}
+
+func TestNonLeaderExpulsion(t *testing.T) {
+	// a follower
+	s := Server{
+		id:     2,
+		term:   1,
+		leader: 1,
+		log: &Log{
+			store:     &bytes.Buffer{},
+			entries:   []LogEntry{LogEntry{Index: 1, Term: 1}},
+			commitPos: 0,
+		},
+		state:         &protectedString{value: Follower},
+		configuration: NewConfiguration(Peers{}),
+		quit:          make(chan chan struct{}),
+	}
+
+	// receives a configuration change that doesn't include itself
+	peers := Peers{
+		1: serializablePeer{1, "foo"},
+		3: serializablePeer{3, "baz"},
+		5: serializablePeer{5, "bat"},
+	}
+	configurationBuf := &bytes.Buffer{}
+	gob.Register(&serializablePeer{})
+	if err := gob.NewEncoder(configurationBuf).Encode(peers); err != nil {
+		t.Fatal(err)
+	}
+
+	// via an AppendEntries
+	s.handleAppendEntries(AppendEntries{
+		Term:         1,
+		LeaderId:     1,
+		PrevLogIndex: 1,
+		PrevLogTerm:  1,
+		Entries: []LogEntry{
+			LogEntry{
+				Index:           2,
+				Term:            1,
+				Command:         configurationBuf.Bytes(),
+				isConfiguration: true,
+			},
+		},
+		CommitIndex: 1,
+	})
+
+	// and once committed
+	s.handleAppendEntries(AppendEntries{
+		Term:         1,
+		LeaderId:     1,
+		PrevLogIndex: 2,
+		PrevLogTerm:  1,
+		CommitIndex:  2,
+	})
+
+	// the follower should shut down
+	select {
+	case q := <-s.quit:
+		q <- struct{}{}
+	case <-time.After(5 * BroadcastInterval()):
+		t.Fatal("didn't shut down")
 	}
 }
 

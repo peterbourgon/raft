@@ -813,22 +813,27 @@ func (s *Server) leaderSelect() {
 
 			// We're gonna write+replicate that config via log mechanisms.
 			// Prepare the on-commit callback.
-			response := make(chan []byte)
-			go func() {
-				switch n := len(<-response); true {
-				case n > 0: // non-zero-byte response = failure
-					s.configuration.ChangeAborted()
-				default: // zero-byte-response = success
-					s.configuration.ChangeCommitted()
-				}
-			}()
 			entry := LogEntry{
 				Index:           s.log.lastIndex() + 1,
 				Term:            s.term,
 				Command:         encodedConfiguration,
-				commandResponse: response,
 				isConfiguration: true,
+				committed:       make(chan bool),
 			}
+			go func() {
+				committed := <-entry.committed
+				if !committed {
+					s.configuration.ChangeAborted()
+					return
+				}
+				s.configuration.ChangeCommitted()
+				if _, ok := s.configuration.AllPeers()[s.Id()]; !ok {
+					s.logGeneric("leader expelled; shutting down")
+					q := make(chan struct{})
+					s.quit <- q
+					<-q
+				}
+			}()
 			if err := s.log.appendEntry(entry); err != nil {
 				t.Err <- err
 				continue
@@ -1043,6 +1048,42 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// Process the entries
 	for i, entry := range r.Entries {
+		// Configuration changes requre special preprocessing
+		var peers Peers
+		if entry.isConfiguration {
+			commandBuf := bytes.NewBuffer(entry.Command)
+			if err := gob.NewDecoder(commandBuf).Decode(&peers); err != nil {
+				panic("gob decode of peers failed")
+			}
+
+			if s.State() == Leader {
+				// TODO should we instead just ignore this entry?
+				return AppendEntriesResponse{
+					Term:    s.term,
+					Success: false,
+					reason: fmt.Sprintf(
+						"AppendEntry %d/%d failed (configuration): %s",
+						i+1,
+						len(r.Entries),
+						"Leader shouldn't receive configurations via AppendEntries",
+					),
+				}, stepDown
+			}
+
+			// Expulsion recognition
+			if _, ok := peers[s.Id()]; !ok {
+				entry.committed = make(chan bool)
+				go func() {
+					if <-entry.committed {
+						s.logGeneric("non-leader expelled; shutting down")
+						q := make(chan struct{})
+						s.quit <- q
+						<-q
+					}
+				}()
+			}
+		}
+
 		// Append entry to the log
 		if err := s.log.appendEntry(entry); err != nil {
 			return AppendEntriesResponse{
@@ -1057,13 +1098,10 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 			}, stepDown
 		}
 
-		// Non-leaders: if we got a configuration change, apply it immediately
-		if s.State() != Leader && entry.isConfiguration {
-			commandBuf := bytes.NewBuffer(entry.Command)
-			var peers Peers
-			if err := gob.NewDecoder(commandBuf).Decode(&peers); err != nil {
-				panic("gob decode of peers failed")
-			}
+		// "Once a given server adds the new configuration entry to its log, it
+		// uses that configuration for all future decisions (it does not wait
+		// for the entry to become committed)."
+		if entry.isConfiguration {
 			if err := s.configuration.DirectSet(peers); err != nil {
 				return AppendEntriesResponse{
 					Term:    s.term,
@@ -1079,7 +1117,8 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 		}
 	}
 
-	// Commit up to the commit index
+	// Commit up to the commit index.
+	//
 	// < ptrb> ongardie: if the new leader sends a 0-entry AppendEntries
 	// with lastIndex=5 commitIndex=4, to a follower that has lastIndex=5
 	// commitIndex=5 -- in my impl, this fails, because commitIndex is too
@@ -1089,6 +1128,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	// network drops packet (2) caller has stale term (3) would leave gap in the
 	// recipient's log (4) term of entry preceding the new entries doesn't match
 	// the term at the same index on the recipient
+	//
 	if r.CommitIndex > 0 && r.CommitIndex > s.log.getCommitIndex() {
 		if err := s.log.commitTo(r.CommitIndex); err != nil {
 			return AppendEntriesResponse{

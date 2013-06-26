@@ -151,9 +151,12 @@ _statement of fact_
 
 If a server receives a configuration-change command that results in a
 configuration that doesn't include its server ID, when that command is
-committed, it should shut itself down. **This is currently being violated**.
+committed, it should shut itself down.
 
-Implementation: special case in custom apply().
+Implementation: if a configuration will result in the current server being
+expelled and shut down, a `committed` channel is injected into the relevant
+LogEntry, and a listener installed. If and when the LogEntry is committed, the
+listener goroutine signals the server to shutdown.
 
 
 > **15** As shown in Figure 9, there is no time when C_old and C_new can both

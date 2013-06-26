@@ -118,6 +118,13 @@ func TestFailedElection(t *testing.T) {
 	t.Logf("remained %s", server.State())
 }
 
+func TestLeaderExpulsion(t *testing.T) {
+	// a leader
+	// receives a configuration that doesn't include itself
+	// when that configuration is committed
+	// the leader should shut down
+}
+
 func TestSimpleConsensus(t *testing.T) {
 	logBuffer := &bytes.Buffer{}
 	log.SetOutput(logBuffer)
