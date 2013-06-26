@@ -6,6 +6,7 @@ It's heavily influenced by [benbjohnson's implementation][goraft].
 [paper]: https://ramcloud.stanford.edu/wiki/download/attachments/11370504/raft.pdf
 [goraft]: https://github.com/benbjohnson/go-raft
 
+
 ## Usage
 
 A node in a Raft network is represented by a [Server][server] component. In a
@@ -73,8 +74,19 @@ func main() {
 }
 ```
 
-Several other transport bridges are coming: net/rpc, straight TCP (probably),
-protobufs (maybe), etc.
+Several other transport bridges are coming; see TODO, below.
+
+
+## Adding and removing nodes
+
+The Raft protocol has no affordance for node discovery or "join/leave"
+semantics. Rather, the protocol assumes an ideal network configuration that's
+known _a priori_ to all nodes in the network, and describes a mechanism (called
+_joint-consensus_) to safely replicate that configuration.
+
+My implementation of joint-consensus abides those fundamental assumptions. Nodes
+may be added or removed dynamically by requesting a **SetConfiguration** that
+describes a complete network topology.
 
 
 ## TODO

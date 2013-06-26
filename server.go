@@ -1,6 +1,8 @@
 package raft
 
 import (
+	"bytes"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
@@ -127,11 +129,12 @@ type Server struct {
 	term          uint64 // "current term number, which increases monotonically"
 	vote          uint64 // who we voted for this term, if applicable
 	log           *Log
-	configuration Peers
+	configuration *Configuration
 
 	appendEntriesChan chan appendEntriesTuple
 	requestVoteChan   chan requestVoteTuple
 	commandChan       chan commandTuple
+	configurationChan chan configurationTuple
 
 	electionTick <-chan time.Time
 	quit         chan chan struct{}
@@ -147,9 +150,9 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 		panic("server id must be > 0")
 	}
 
+	// 5.2 Leader election: "the latest term this server has seen is persisted,
+	// and is initialized to 0 on first boot.""
 	log := NewLog(store, apply)
-	// 5.2 Leader election: the latest term this server has seen is persisted,
-	// and is initialized to 0 on first boot.
 	latestTerm := log.lastTerm()
 
 	s := &Server{
@@ -159,11 +162,12 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 		leader:        unknownLeader, // unknown at startup
 		log:           log,
 		term:          latestTerm,
-		configuration: nil,
+		configuration: NewConfiguration(Peers{}),
 
 		appendEntriesChan: make(chan appendEntriesTuple),
 		requestVoteChan:   make(chan requestVoteTuple),
 		commandChan:       make(chan commandTuple),
+		configurationChan: make(chan configurationTuple),
 
 		electionTick: nil,
 		quit:         make(chan chan struct{}),
@@ -174,16 +178,26 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 
 func (s *Server) Id() uint64 { return s.id }
 
+type configurationTuple struct {
+	Peers Peers
+	Err   chan error
+}
+
 // SetConfiguration sets the peers that this server will attempt to communicate
 // with. The set peers should include a peer that represents this server, so
-// that quorum is calculated correctly. SetConfiguration should be called
-// before starting the server.
+// that quorum is calculated correctly. SetConfiguration must be called before
+// starting the server.
 func (s *Server) SetConfiguration(peers Peers) error {
-	if s.running.Get() {
-		return ErrAlreadyRunning
+	// Pre-start SetConfiguration are special cased to simply set and return
+	if !s.running.Get() {
+		s.configuration.DirectSet(peers)
+		return nil
 	}
-	s.configuration = peers
-	return nil
+
+	// Post-start SetConfiguration require communication with the leader
+	err := make(chan error)
+	s.configurationChan <- configurationTuple{peers, err}
+	return <-err
 }
 
 // State returns the current state: follower, candidate, or leader.
@@ -332,7 +346,7 @@ func (s *Server) forwardCommand(t commandTuple) {
 		panic("impossible state in forwardCommand")
 
 	default:
-		leader, ok := s.configuration[s.leader]
+		leader, ok := s.configuration.Get(s.leader)
 		if !ok {
 			panic("invalid state in peers")
 		}
@@ -341,6 +355,25 @@ func (s *Server) forwardCommand(t commandTuple) {
 		// receive-command branch. If we continue to block while forwarding
 		// the command, the leader won't be able to get a response from us!
 		go func() { t.Err <- leader.Command(t.Command, t.CommandResponse) }()
+	}
+}
+
+func (s *Server) forwardConfiguration(t configurationTuple) {
+	switch s.leader {
+	case unknownLeader:
+		s.logGeneric("got configuration, but don't know leader")
+		t.Err <- ErrUnknownLeader
+
+	case s.id: // I am the leader
+		panic("impossible state in forwardConfiguration")
+
+	default:
+		leader, ok := s.configuration.Get(s.leader)
+		if !ok {
+			panic("invalid state in peers")
+		}
+		s.logGeneric("got configuration, forwarding to leader (%d)", s.leader)
+		go func() { t.Err <- leader.SetConfiguration(t.Peers) }()
 	}
 }
 
@@ -354,10 +387,13 @@ func (s *Server) followerSelect() {
 		case t := <-s.commandChan:
 			s.forwardCommand(t)
 
+		case t := <-s.configurationChan:
+			s.forwardConfiguration(t)
+
 		case <-s.electionTick:
 			// 5.2 Leader election: "A follower increments its current term and
 			// transitions to candidate state."
-			if s.configuration.Count() <= 0 {
+			if s.configuration == nil {
 				s.logGeneric("election timeout, but no configuration: ignoring")
 				s.resetElectionTimeout()
 				continue
@@ -415,21 +451,23 @@ func (s *Server) candidateSelect() {
 	// parallel to each of the other servers in the cluster. If the candidate
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
-	responses, canceler := s.configuration.Except(s.id).requestVotes(RequestVote{
+
+	tuples, canceler := s.configuration.AllPeers().Except(s.id).requestVotes(RequestVote{
 		Term:         s.term,
 		CandidateId:  s.id,
 		LastLogIndex: s.log.lastIndex(),
 		LastLogTerm:  s.log.lastTerm(),
 	})
 	defer canceler.Cancel()
-	s.vote = s.id      // vote for myself
-	votesReceived := 1 // already have a vote from myself
-	votesRequired := s.configuration.Quorum()
-	s.logGeneric("term=%d election started, %d vote(s) required", s.term, votesRequired)
 
-	// catch a bad state
-	if votesReceived >= votesRequired {
-		s.logGeneric("%d-node cluster; I win", s.configuration.Count())
+	// Set up vote tallies (plus, vote for myself)
+	votes := map[uint64]bool{s.id: true}
+	s.vote = s.id
+	s.logGeneric("term=%d election started (configuration state %s)", s.term, s.configuration.state)
+
+	// catch a weird state
+	if s.configuration.Pass(votes) {
+		s.logGeneric("I immediately won the election")
 		s.leader = s.id
 		s.state.Set(Leader)
 		s.vote = noVote
@@ -448,27 +486,31 @@ func (s *Server) candidateSelect() {
 		case t := <-s.commandChan:
 			s.forwardCommand(t)
 
-		case r := <-responses:
-			s.logGeneric("got vote: term=%d granted=%v", r.Term, r.VoteGranted)
+		case t := <-s.configurationChan:
+			s.forwardConfiguration(t)
+
+		case t := <-tuples:
+			s.logGeneric("got vote: id=%d term=%d granted=%v", t.id, t.rvr.Term, t.rvr.VoteGranted)
 			// "A candidate wins the election if it receives votes from a
 			// majority of servers in the full cluster for the same term."
-			if r.Term > s.term {
-				s.logGeneric("got future term (%d>%d); abandoning election", r.Term, s.term)
+			if t.rvr.Term > s.term {
+				s.logGeneric("got vote from future term (%d>%d); abandoning election", t.rvr.Term, s.term)
 				s.leader = unknownLeader
 				s.state.Set(Follower)
 				s.vote = noVote
 				return // lose
 			}
-			if r.Term < s.term {
-				s.logGeneric("got vote from past term (%d<%d); ignoring", r.Term, s.term)
+			if t.rvr.Term < s.term {
+				s.logGeneric("got vote from past term (%d<%d); ignoring", t.rvr.Term, s.term)
 				break
 			}
-			if r.VoteGranted {
-				votesReceived++
+			if t.rvr.VoteGranted {
+				s.logGeneric("%d voted for me", t.id)
+				votes[t.id] = true
 			}
 			// "Once a candidate wins an election, it becomes leader."
-			if votesReceived >= votesRequired {
-				s.logGeneric("%d >= %d: win", votesReceived, votesRequired)
+			if s.configuration.Pass(votes) {
+				s.logGeneric("I won the election")
 				s.leader = s.id
 				s.state.Set(Leader)
 				s.vote = noVote
@@ -710,7 +752,7 @@ func (s *Server) leaderSelect() {
 	// doing the decrement. This was just annoying, except if you manage to
 	// sneak in a command before the first heartbeat. Then, it will never get
 	// properly replicated (it seemed).
-	ni := newNextIndex(s.configuration.Except(s.id), s.log.lastIndex()) // +1)
+	ni := newNextIndex(s.configuration.AllPeers().Except(s.id), s.log.lastIndex()) // +1)
 
 	flush := make(chan struct{})
 	heartbeat := time.NewTicker(BroadcastInterval())
@@ -741,7 +783,12 @@ func (s *Server) leaderSelect() {
 				t.Err <- err
 				continue
 			}
-			s.logGeneric("after append, commitIndex=%d lastIndex=%d lastTerm=%d", s.log.getCommitIndex(), s.log.lastIndex(), s.log.lastTerm())
+			s.logGeneric(
+				"after append, commitIndex=%d lastIndex=%d lastTerm=%d",
+				s.log.getCommitIndex(),
+				s.log.lastIndex(),
+				s.log.lastTerm(),
+			)
 
 			// Now that the entry is in the log, we can fall back to the
 			// normal flushing mechanism to attempt to replicate the entry
@@ -750,13 +797,55 @@ func (s *Server) leaderSelect() {
 			go func() { flush <- struct{}{} }()
 			t.Err <- nil
 
+		case t := <-s.configurationChan:
+			// Attempt to change our local configuration
+			if err := s.configuration.ChangeTo(t.Peers); err != nil {
+				t.Err <- err
+				continue
+			}
+
+			// Serialize the local (C_old,new) configuration
+			encodedConfiguration, err := s.configuration.Encode()
+			if err != nil {
+				t.Err <- err
+				continue
+			}
+
+			// We're gonna write+replicate that config via log mechanisms.
+			// Prepare the on-commit callback.
+			entry := LogEntry{
+				Index:           s.log.lastIndex() + 1,
+				Term:            s.term,
+				Command:         encodedConfiguration,
+				isConfiguration: true,
+				committed:       make(chan bool),
+			}
+			go func() {
+				committed := <-entry.committed
+				if !committed {
+					s.configuration.ChangeAborted()
+					return
+				}
+				s.configuration.ChangeCommitted()
+				if _, ok := s.configuration.AllPeers()[s.Id()]; !ok {
+					s.logGeneric("leader expelled; shutting down")
+					q := make(chan struct{})
+					s.quit <- q
+					<-q
+				}
+			}()
+			if err := s.log.appendEntry(entry); err != nil {
+				t.Err <- err
+				continue
+			}
+
 		case <-flush:
 			// Flushes attempt to sync the follower log with ours.
 			// That requires per-follower state in the form of nextIndex.
 			// After every flush, we check if we can advance our commitIndex.
 			// If so, we do it, and trigger another flush ASAP.
 			// A flush can cause us to be deposed.
-			recipients := s.configuration.Except(s.id)
+			recipients := s.configuration.AllPeers().Except(s.id)
 
 			// Special case: network of 1
 			if len(recipients) <= 0 {
@@ -957,8 +1046,45 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 		}, stepDown
 	}
 
-	// Append entries to the log
+	// Process the entries
 	for i, entry := range r.Entries {
+		// Configuration changes requre special preprocessing
+		var peers Peers
+		if entry.isConfiguration {
+			commandBuf := bytes.NewBuffer(entry.Command)
+			if err := gob.NewDecoder(commandBuf).Decode(&peers); err != nil {
+				panic("gob decode of peers failed")
+			}
+
+			if s.State() == Leader {
+				// TODO should we instead just ignore this entry?
+				return AppendEntriesResponse{
+					Term:    s.term,
+					Success: false,
+					reason: fmt.Sprintf(
+						"AppendEntry %d/%d failed (configuration): %s",
+						i+1,
+						len(r.Entries),
+						"Leader shouldn't receive configurations via AppendEntries",
+					),
+				}, stepDown
+			}
+
+			// Expulsion recognition
+			if _, ok := peers[s.Id()]; !ok {
+				entry.committed = make(chan bool)
+				go func() {
+					if <-entry.committed {
+						s.logGeneric("non-leader expelled; shutting down")
+						q := make(chan struct{})
+						s.quit <- q
+						<-q
+					}
+				}()
+			}
+		}
+
+		// Append entry to the log
 		if err := s.log.appendEntry(entry); err != nil {
 			return AppendEntriesResponse{
 				Term:    s.term,
@@ -971,9 +1097,28 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 				),
 			}, stepDown
 		}
+
+		// "Once a given server adds the new configuration entry to its log, it
+		// uses that configuration for all future decisions (it does not wait
+		// for the entry to become committed)."
+		if entry.isConfiguration {
+			if err := s.configuration.DirectSet(peers); err != nil {
+				return AppendEntriesResponse{
+					Term:    s.term,
+					Success: false,
+					reason: fmt.Sprintf(
+						"AppendEntry %d/%d failed (configuration): %s",
+						i+1,
+						len(r.Entries),
+						err,
+					),
+				}, stepDown
+			}
+		}
 	}
 
-	// Commit up to the commit index
+	// Commit up to the commit index.
+	//
 	// < ptrb> ongardie: if the new leader sends a 0-entry AppendEntries
 	// with lastIndex=5 commitIndex=4, to a follower that has lastIndex=5
 	// commitIndex=5 -- in my impl, this fails, because commitIndex is too
@@ -983,6 +1128,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	// network drops packet (2) caller has stale term (3) would leave gap in the
 	// recipient's log (4) term of entry preceding the new entries doesn't match
 	// the term at the same index on the recipient
+	//
 	if r.CommitIndex > 0 && r.CommitIndex > s.log.getCommitIndex() {
 		if err := s.log.commitTo(r.CommitIndex); err != nil {
 			return AppendEntriesResponse{

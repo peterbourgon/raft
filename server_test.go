@@ -118,6 +118,13 @@ func TestFailedElection(t *testing.T) {
 	t.Logf("remained %s", server.State())
 }
 
+func TestLeaderExpulsion(t *testing.T) {
+	// a leader
+	// receives a configuration that doesn't include itself
+	// when that configuration is committed
+	// the leader should shut down
+}
+
 func TestSimpleConsensus(t *testing.T) {
 	logBuffer := &bytes.Buffer{}
 	log.SetOutput(logBuffer)
@@ -429,6 +436,9 @@ func (p nonresponsivePeer) RequestVote(raft.RequestVote) raft.RequestVoteRespons
 func (p nonresponsivePeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
+func (p nonresponsivePeer) SetConfiguration(raft.Peers) error {
+	return fmt.Errorf("not implemented")
+}
 
 type approvingPeer uint64
 
@@ -445,6 +455,9 @@ func (p approvingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteResponse
 func (p approvingPeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
+func (p approvingPeer) SetConfiguration(raft.Peers) error {
+	return fmt.Errorf("not implemented")
+}
 
 type disapprovingPeer uint64
 
@@ -459,5 +472,8 @@ func (p disapprovingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteRespo
 	}
 }
 func (p disapprovingPeer) Command([]byte, chan []byte) error {
+	return fmt.Errorf("not implemented")
+}
+func (p disapprovingPeer) SetConfiguration(raft.Peers) error {
 	return fmt.Errorf("not implemented")
 }
