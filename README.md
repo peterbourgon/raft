@@ -3,9 +3,12 @@
 This is an implementation of the [Raft distributed consensus protocol][paper].
 It's heavily influenced by [benbjohnson's implementation][goraft].
 
+[![Build Status][buildimg]][buildurl]
+
 [paper]: https://ramcloud.stanford.edu/wiki/download/attachments/11370504/raft.pdf
 [goraft]: https://github.com/benbjohnson/go-raft
-
+[buildimg]: https://secure.travis-ci.org/peterbourgon/raft.png
+[buildurl]: http://www.travis-ci.org/peterbourgon/raft
 
 ## Usage
 
@@ -97,8 +100,9 @@ describes a complete network topology.
 * ~~HTTP transport~~ _done_
 * [net/rpc][netrpc] transport
 * Other transports?
-* Configuration changes (joint-consensus mode) ☜ **up next**
+* ~~Configuration changes (joint-consensus mode)~~ _done_
 * Log compaction
+* Robust demo application ☜ **up next**
 * Complex unit tests (one per scenario described in the paper)
 
 [netrpc]: http://golang.org/pkg/net/rpc
