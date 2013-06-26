@@ -158,3 +158,6 @@ func (p *echoServer) Command(cmd []byte, response chan []byte) error {
 	go func() { response <- cmd }()
 	return nil
 }
+func (p *echoServer) SetConfiguration(raft.Peers) error {
+	return nil
+}

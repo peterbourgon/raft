@@ -12,10 +12,11 @@ import (
 )
 
 const (
-	IdPath            = "/raft/id"
-	AppendEntriesPath = "/raft/appendentries"
-	RequestVotePath   = "/raft/requestvote"
-	CommandPath       = "/raft/command"
+	IdPath               = "/raft/id"
+	AppendEntriesPath    = "/raft/appendentries"
+	RequestVotePath      = "/raft/requestvote"
+	CommandPath          = "/raft/command"
+	SetConfigurationPath = "/raft/setconfiguration"
 )
 
 var (
@@ -83,6 +84,10 @@ func (p *Peer) Command(cmd []byte, response chan []byte) error {
 		response <- responseBuf.Bytes()
 	}()
 	return nil // TODO could make this smarter (i.e. timeout), with more work
+}
+
+func (p *Peer) SetConfiguration(peers raft.Peers) error {
+	return fmt.Errorf("not yet implemented")
 }
 
 func (p *Peer) rpc(request interface{}, path string, response interface{}) error {
