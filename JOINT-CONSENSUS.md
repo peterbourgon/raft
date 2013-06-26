@@ -14,11 +14,7 @@ suggestions, and hints to the implementation.
 > then transitions to the new configuration.
 
 Every server should probably have a two-phase approach to configuration
-management: either in a stable (C_old/C_new) or unstable (C_old,new) state.
-
-```
-type Configuration struct { stable, unstable Peers }
-```
+management: either in a stable (C_old) or unstable (C_old + C_old,new) state.
 
 
 > **2** The joint consensus combines both the old and new configurations:
@@ -26,10 +22,6 @@ type Configuration struct { stable, unstable Peers }
 
 Being in the unstable C_old,new state means sending requests to a union-set of
 C_old and C_new servers.
-
-```
-func (c *Configuration) AllPeers() Peers { /* union-set */ }
-```
 
 
 > **2b** Any server from either configuration may serve as leader.
