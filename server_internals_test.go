@@ -2,7 +2,10 @@ package raft
 
 import (
 	"bytes"
+	"encoding/gob"
+	"fmt"
 	"testing"
+	"time"
 )
 
 func TestFollowerAllegiance(t *testing.T) {
@@ -91,7 +94,7 @@ func TestLenientCommit(t *testing.T) {
 		state:  &protectedString{value: Follower},
 	}
 
-	// a leader attempts to AppendEntries with PrevLogIndex=5 CommitIndex=4
+	// an AppendEntries comes with correct PrevLogIndex but older CommitIndex
 	resp, stepDown := s.handleAppendEntries(AppendEntries{
 		Term:         2,
 		LeaderId:     101,
@@ -107,4 +110,147 @@ func TestLenientCommit(t *testing.T) {
 	if stepDown {
 		t.Errorf("shouldn't step down")
 	}
+}
+
+func TestConfigurationReceipt(t *testing.T) {
+	// a follower
+	s := Server{
+		id:     2,
+		term:   1,
+		leader: 1,
+		log: &Log{
+			entries:   []LogEntry{LogEntry{Index: 1, Term: 1}},
+			commitPos: 0,
+		},
+		state:         &protectedString{value: Follower},
+		configuration: NewConfiguration(Peers{}),
+	}
+
+	// receives a configuration change
+	peers := Peers{
+		1: serializablePeer{1, "foo"},
+		2: serializablePeer{2, "bar"},
+		3: serializablePeer{3, "baz"},
+	}
+	configurationBuf := &bytes.Buffer{}
+	gob.Register(&serializablePeer{})
+	if err := gob.NewEncoder(configurationBuf).Encode(peers); err != nil {
+		t.Fatal(err)
+	}
+
+	// via an AppendEntries
+	aer, _ := s.handleAppendEntries(AppendEntries{
+		Term:         1,
+		LeaderId:     1,
+		PrevLogIndex: 1,
+		PrevLogTerm:  1,
+		Entries: []LogEntry{
+			LogEntry{
+				Index:           2,
+				Term:            1,
+				Command:         configurationBuf.Bytes(),
+				isConfiguration: true,
+			},
+		},
+		CommitIndex: 1,
+	})
+
+	// it should succeed
+	if !aer.Success {
+		t.Fatalf("AppendEntriesResponse: no success: %s", aer.reason)
+	}
+
+	// and the follower's configuration should be immediately updated
+	if expected, got := 3, s.configuration.AllPeers().Count(); expected != got {
+		t.Fatalf("follower peer count: expected %d, got %d", expected, got)
+	}
+	peer, ok := s.configuration.Get(3)
+	if !ok {
+		t.Fatal("follower didn't get peer 3")
+	}
+	if peer.Id() != 3 {
+		t.Fatal("follower got bad peer 3")
+	}
+}
+
+func TestNonLeaderExpulsion(t *testing.T) {
+	// a follower
+	s := Server{
+		id:     2,
+		term:   1,
+		leader: 1,
+		log: &Log{
+			store:     &bytes.Buffer{},
+			entries:   []LogEntry{LogEntry{Index: 1, Term: 1}},
+			commitPos: 0,
+		},
+		state:         &protectedString{value: Follower},
+		configuration: NewConfiguration(Peers{}),
+		quit:          make(chan chan struct{}),
+	}
+
+	// receives a configuration change that doesn't include itself
+	peers := Peers{
+		1: serializablePeer{1, "foo"},
+		3: serializablePeer{3, "baz"},
+		5: serializablePeer{5, "bat"},
+	}
+	configurationBuf := &bytes.Buffer{}
+	gob.Register(&serializablePeer{})
+	if err := gob.NewEncoder(configurationBuf).Encode(peers); err != nil {
+		t.Fatal(err)
+	}
+
+	// via an AppendEntries
+	s.handleAppendEntries(AppendEntries{
+		Term:         1,
+		LeaderId:     1,
+		PrevLogIndex: 1,
+		PrevLogTerm:  1,
+		Entries: []LogEntry{
+			LogEntry{
+				Index:           2,
+				Term:            1,
+				Command:         configurationBuf.Bytes(),
+				isConfiguration: true,
+			},
+		},
+		CommitIndex: 1,
+	})
+
+	// and once committed
+	s.handleAppendEntries(AppendEntries{
+		Term:         1,
+		LeaderId:     1,
+		PrevLogIndex: 2,
+		PrevLogTerm:  1,
+		CommitIndex:  2,
+	})
+
+	// the follower should shut down
+	select {
+	case q := <-s.quit:
+		q <- struct{}{}
+	case <-time.After(5 * BroadcastInterval()):
+		t.Fatal("didn't shut down")
+	}
+}
+
+type serializablePeer struct {
+	MyId uint64
+	Err  string
+}
+
+func (p serializablePeer) Id() uint64 { return p.MyId }
+func (p serializablePeer) AppendEntries(AppendEntries) AppendEntriesResponse {
+	return AppendEntriesResponse{}
+}
+func (p serializablePeer) RequestVote(rv RequestVote) RequestVoteResponse {
+	return RequestVoteResponse{}
+}
+func (p serializablePeer) Command([]byte, chan []byte) error {
+	return fmt.Errorf("%s", p.Err)
+}
+func (p serializablePeer) SetConfiguration(Peers) error {
+	return fmt.Errorf("%s", p.Err)
 }

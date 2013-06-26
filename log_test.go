@@ -42,7 +42,7 @@ func TestLogEntriesAfter(t *testing.T) {
 		}
 	}
 
-	log.appendEntry(LogEntry{1, 1, c, oneshot()})
+	log.appendEntry(LogEntry{1, 1, c, nil, oneshot(), false})
 	for _, tu := range []tuple{
 		{0, 1, 0},
 		{1, 0, 1},
@@ -59,7 +59,7 @@ func TestLogEntriesAfter(t *testing.T) {
 		}
 	}
 
-	log.appendEntry(LogEntry{2, 1, c, oneshot()})
+	log.appendEntry(LogEntry{2, 1, c, nil, oneshot(), false})
 	for _, tu := range []tuple{
 		{0, 2, 0},
 		{1, 1, 1},
@@ -76,7 +76,7 @@ func TestLogEntriesAfter(t *testing.T) {
 		}
 	}
 
-	log.appendEntry(LogEntry{3, 2, c, oneshot()})
+	log.appendEntry(LogEntry{3, 2, c, nil, oneshot(), false})
 	for _, tu := range []tuple{
 		{0, 3, 0},
 		{1, 2, 1},
@@ -96,12 +96,12 @@ func TestLogEntriesAfter(t *testing.T) {
 
 func TestLogEntryEncodeDecode(t *testing.T) {
 	for _, logEntry := range []LogEntry{
-		LogEntry{1, 1, []byte(`{}`), oneshot()},
-		LogEntry{1, 2, []byte(`{}`), oneshot()},
-		LogEntry{1, 2, []byte(`{}`), oneshot()},
-		LogEntry{2, 2, []byte(`{}`), oneshot()},
-		LogEntry{255, 3, []byte(`{"cmd": 123}`), oneshot()},
-		LogEntry{math.MaxUint64 - 1, math.MaxUint64, []byte(`{}`), oneshot()},
+		LogEntry{1, 1, []byte(`{}`), nil, oneshot(), false},
+		LogEntry{1, 2, []byte(`{}`), nil, oneshot(), false},
+		LogEntry{1, 2, []byte(`{}`), nil, oneshot(), false},
+		LogEntry{2, 2, []byte(`{}`), nil, oneshot(), false},
+		LogEntry{255, 3, []byte(`{"cmd": 123}`), nil, oneshot(), false},
+		LogEntry{math.MaxUint64 - 1, math.MaxUint64, []byte(`{}`), nil, oneshot(), false},
 	} {
 		b := &bytes.Buffer{}
 		if err := logEntry.encode(b); err != nil {
@@ -123,21 +123,21 @@ func TestLogAppend(t *testing.T) {
 	log := NewLog(buf, noop)
 
 	// Append 3 valid LogEntries
-	if err := log.appendEntry(LogEntry{1, 1, c, oneshot()}); err != nil {
+	if err := log.appendEntry(LogEntry{1, 1, c, nil, oneshot(), false}); err != nil {
 		t.Errorf("Append: %s", err)
 	}
-	if err := log.appendEntry(LogEntry{2, 1, c, oneshot()}); err != nil {
+	if err := log.appendEntry(LogEntry{2, 1, c, nil, oneshot(), false}); err != nil {
 		t.Errorf("Append: %s", err)
 	}
-	if err := log.appendEntry(LogEntry{3, 2, c, oneshot()}); err != nil {
+	if err := log.appendEntry(LogEntry{3, 2, c, nil, oneshot(), false}); err != nil {
 		t.Errorf("Append: %s", err)
 	}
 
 	// Append some invalid LogEntries
-	if err := log.appendEntry(LogEntry{4, 1, c, oneshot()}); err != ErrTermTooSmall {
+	if err := log.appendEntry(LogEntry{4, 1, c, nil, oneshot(), false}); err != ErrTermTooSmall {
 		t.Errorf("Append: expected ErrTermTooSmall, got %v", err)
 	}
-	if err := log.appendEntry(LogEntry{2, 2, c, oneshot()}); err != ErrIndexTooSmall {
+	if err := log.appendEntry(LogEntry{2, 2, c, nil, oneshot(), false}); err != ErrIndexTooSmall {
 		t.Errorf("Append: expected ErrIndexTooSmall, got %v", nil)
 	}
 
@@ -218,7 +218,7 @@ func TestLogContains(t *testing.T) {
 		{2, 1},
 		{3, 2},
 	} {
-		e := LogEntry{tuple.Index, tuple.Term, c, oneshot()}
+		e := LogEntry{tuple.Index, tuple.Term, c, nil, oneshot(), false}
 		if err := log.appendEntry(e); err != nil {
 			t.Fatalf("appendEntry(%v): %s", e, err)
 		}
@@ -262,7 +262,7 @@ func TestLogTruncation(t *testing.T) {
 		{2, 1},
 		{3, 2},
 	} {
-		e := LogEntry{tuple.Index, tuple.Term, c, oneshot()}
+		e := LogEntry{tuple.Index, tuple.Term, c, nil, oneshot(), false}
 		if err := log.appendEntry(e); err != nil {
 			t.Fatalf("appendEntry(%v): %s", e, err)
 		}
@@ -339,9 +339,9 @@ func TestLogCommitTwice(t *testing.T) {
 
 func TestCleanLogRecovery(t *testing.T) {
 	entries := []LogEntry{
-		{1, 1, []byte("{}"), nil},
-		{2, 1, []byte("{}"), nil},
-		{3, 2, []byte("{}"), nil},
+		{1, 1, []byte("{}"), nil, nil, false},
+		{2, 1, []byte("{}"), nil, nil, false},
+		{3, 2, []byte("{}"), nil, nil, false},
 	}
 
 	buf := new(bytes.Buffer)
@@ -395,10 +395,10 @@ func TestCleanLogRecovery(t *testing.T) {
 
 func TestCorruptedLogRecovery(t *testing.T) {
 	entries := []LogEntry{
-		{1, 1, []byte("{}"), nil},
+		{1, 1, []byte("{}"), nil, nil, false},
 	}
 
-	buf := new(bytes.Buffer)
+	buf := &bytes.Buffer{}
 	for _, entry := range entries {
 		entry.encode(buf)
 	}
@@ -432,5 +432,4 @@ func TestCorruptedLogRecovery(t *testing.T) {
 	if !log.contains(4, 3) {
 		t.Errorf("log doesn't contain index=4 term=3")
 	}
-
 }
