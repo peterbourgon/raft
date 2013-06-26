@@ -115,7 +115,10 @@ func (c *Configuration) Pass(votes map[uint64]bool) bool {
 		panic(fmt.Sprintf("Configuration state '%s', but no C_new peers", c.state))
 	}
 
-	// Since we're in C_old,new, we need to also pass C_new to pass overall
+	// Since we're in C_old,new, we need to also pass C_new to pass overall.
+	// It's important that we range through C_new and check our votes map, and
+	// not the other way around: if a server casts a vote but doesn't exist in
+	// a particular configuration, that vote should not be counted.
 	c_newHave, c_newRequired := 0, c.c_new.Quorum()
 	for id := range c.c_new {
 		if votes[id] {

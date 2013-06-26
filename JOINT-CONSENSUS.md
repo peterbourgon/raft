@@ -191,8 +191,9 @@ synonymous with exiting its select loop -- the same behavior as followers.
 
 Leaders should take care to not automatically vote for themselves when
 counting majorities for a [C_new] state that doesn't include them.
-**I believe this is currently being violated**.
 
+Implementation: when counting votes, range over the actual configuration
+members, and compare against the passed vote-tally -- not the other way around.
 
 > **20** The leader should not step down earlier, because members not in C_new
 > could still be elected, resulting in unnecessary elections.
