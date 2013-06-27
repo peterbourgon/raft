@@ -2,6 +2,7 @@ package rafthttp
 
 import (
 	"bytes"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"github.com/peterbourgon/raft"
@@ -25,6 +26,9 @@ var (
 )
 
 func init() {
+	var peers raft.Peers
+	gob.Register(&peers)
+
 	json.NewEncoder(&emptyAppendEntriesResponse).Encode(raft.AppendEntriesResponse{})
 	json.NewEncoder(&emptyRequestVoteResponse).Encode(raft.RequestVoteResponse{})
 }
@@ -87,7 +91,18 @@ func (p *Peer) Command(cmd []byte, response chan []byte) error {
 }
 
 func (p *Peer) SetConfiguration(peers raft.Peers) error {
-	return fmt.Errorf("not yet implemented")
+	buf := &bytes.Buffer{}
+	if err := gob.NewEncoder(buf).Encode(&peers); err != nil {
+		return err
+	}
+
+	var resp commaError
+	p.rpc(buf, SetConfigurationPath, &resp)
+	if !resp.Success {
+		return fmt.Errorf(resp.Error)
+	}
+
+	return nil
 }
 
 func (p *Peer) rpc(request interface{}, path string, response interface{}) error {
@@ -133,6 +148,7 @@ func (s *Server) Install(mux Muxer) {
 	mux.HandleFunc(AppendEntriesPath, s.appendEntriesHandler())
 	mux.HandleFunc(RequestVotePath, s.requestVoteHandler())
 	mux.HandleFunc(CommandPath, s.commandHandler())
+	mux.HandleFunc(SetConfigurationPath, s.setConfigurationHandler())
 }
 
 func (s *Server) idHandler() http.HandlerFunc {
@@ -203,4 +219,31 @@ func (s *Server) commandHandler() http.HandlerFunc {
 
 		w.Write(resp)
 	}
+}
+
+func (s *Server) setConfigurationHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+
+		var peers raft.Peers
+		if err := gob.NewDecoder(r.Body).Decode(&peers); err != nil {
+			errBuf, _ := json.Marshal(commaError{err.Error(), false})
+			http.Error(w, string(errBuf), http.StatusBadRequest)
+			return
+		}
+
+		if err := s.server.SetConfiguration(peers); err != nil {
+			errBuf, _ := json.Marshal(commaError{err.Error(), false})
+			http.Error(w, string(errBuf), http.StatusInternalServerError)
+			return
+		}
+
+		respBuf, _ := json.Marshal(commaError{"", true})
+		w.Write(respBuf)
+	}
+}
+
+type commaError struct {
+	Error   string `json:"error,omitempty"`
+	Success bool   `json:"success,omitempty"`
 }

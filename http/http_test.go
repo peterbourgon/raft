@@ -2,6 +2,7 @@ package rafthttp_test
 
 import (
 	"bytes"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 	"github.com/peterbourgon/raft"
@@ -114,6 +115,41 @@ func TestRequestVote(t *testing.T) {
 	}
 }
 
+func TestSetConfiguration(t *testing.T) {
+	server := &echoServer{
+		id:    1,
+		aer:   raft.AppendEntriesResponse{},
+		rvr:   raft.RequestVoteResponse{},
+		peers: raft.Peers{},
+	}
+	s := rafthttp.NewServer(server)
+	m := newMockMux()
+	s.Install(m)
+
+	gob.Register(serializablePeer{})
+	peers := raft.Peers{
+		12: serializablePeer{12, "not implemented"},
+		24: serializablePeer{24, "not implemented"},
+		36: serializablePeer{36, "not implemented"},
+	}
+	var body bytes.Buffer
+	if err := gob.NewEncoder(&body).Encode(peers); err != nil {
+		t.Fatal(err)
+	}
+
+	req, _ := http.NewRequest("POST", "", &body)
+	_, err := m.Call(rafthttp.SetConfigurationPath, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for id := range peers {
+		if _, ok := server.peers[id]; !ok {
+			t.Errorf("server didn't receive peer %d", id)
+		}
+	}
+}
+
 type mockMux struct {
 	registry map[string]http.HandlerFunc
 }
@@ -142,9 +178,10 @@ func (m *mockMux) Call(path string, r *http.Request) ([]byte, error) {
 }
 
 type echoServer struct {
-	id  uint64
-	aer raft.AppendEntriesResponse
-	rvr raft.RequestVoteResponse
+	id    uint64
+	aer   raft.AppendEntriesResponse
+	rvr   raft.RequestVoteResponse
+	peers raft.Peers
 }
 
 func (p *echoServer) Id() uint64 { return p.id }
@@ -158,6 +195,26 @@ func (p *echoServer) Command(cmd []byte, response chan []byte) error {
 	go func() { response <- cmd }()
 	return nil
 }
-func (p *echoServer) SetConfiguration(raft.Peers) error {
+func (p *echoServer) SetConfiguration(peers raft.Peers) error {
+	p.peers = peers
 	return nil
+}
+
+type serializablePeer struct {
+	MyId uint64
+	Err  string
+}
+
+func (p serializablePeer) Id() uint64 { return p.MyId }
+func (p serializablePeer) AppendEntries(raft.AppendEntries) raft.AppendEntriesResponse {
+	return raft.AppendEntriesResponse{}
+}
+func (p serializablePeer) RequestVote(raft.RequestVote) raft.RequestVoteResponse {
+	return raft.RequestVoteResponse{}
+}
+func (p serializablePeer) Command([]byte, chan []byte) error {
+	return fmt.Errorf("%s", p.Err)
+}
+func (p serializablePeer) SetConfiguration(raft.Peers) error {
+	return fmt.Errorf("%s", p.Err)
 }
