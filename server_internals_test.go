@@ -245,7 +245,7 @@ func (p serializablePeer) Id() uint64 { return p.MyId }
 func (p serializablePeer) AppendEntries(AppendEntries) AppendEntriesResponse {
 	return AppendEntriesResponse{}
 }
-func (p serializablePeer) RequestVote(rv RequestVote) RequestVoteResponse {
+func (p serializablePeer) RequestVote(RequestVote) RequestVoteResponse {
 	return RequestVoteResponse{}
 }
 func (p serializablePeer) Command([]byte, chan []byte) error {
