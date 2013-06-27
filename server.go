@@ -122,14 +122,14 @@ func (s *protectedBool) Set(value bool) {
 // In a typical application, each running process that wants to be part of
 // the distributed state machine will contain a server component.
 type Server struct {
-	id            uint64 // id of this server
-	state         *protectedString
-	running       *protectedBool
-	leader        uint64 // who we believe is the leader
-	term          uint64 // "current term number, which increases monotonically"
-	vote          uint64 // who we voted for this term, if applicable
-	log           *Log
-	configuration *Configuration
+	id      uint64 // id of this server
+	state   *protectedString
+	running *protectedBool
+	leader  uint64 // who we believe is the leader
+	term    uint64 // "current term number, which increases monotonically"
+	vote    uint64 // who we voted for this term, if applicable
+	log     *Log
+	config  *configuration
 
 	appendEntriesChan chan appendEntriesTuple
 	requestVoteChan   chan requestVoteTuple
@@ -156,13 +156,13 @@ func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte
 	latestTerm := log.lastTerm()
 
 	s := &Server{
-		id:            id,
-		state:         &protectedString{value: Follower}, // "when servers start up they begin as followers"
-		running:       &protectedBool{value: false},
-		leader:        unknownLeader, // unknown at startup
-		log:           log,
-		term:          latestTerm,
-		configuration: NewConfiguration(Peers{}),
+		id:      id,
+		state:   &protectedString{value: Follower}, // "when servers start up they begin as followers"
+		running: &protectedBool{value: false},
+		leader:  unknownLeader, // unknown at startup
+		log:     log,
+		term:    latestTerm,
+		config:  newConfiguration(Peers{}),
 
 		appendEntriesChan: make(chan appendEntriesTuple),
 		requestVoteChan:   make(chan requestVoteTuple),
@@ -190,7 +190,7 @@ type configurationTuple struct {
 func (s *Server) SetConfiguration(peers Peers) error {
 	// Pre-start SetConfiguration are special cased to simply set and return
 	if !s.running.Get() {
-		s.configuration.DirectSet(peers)
+		s.config.directSet(peers)
 		return nil
 	}
 
@@ -346,7 +346,7 @@ func (s *Server) forwardCommand(t commandTuple) {
 		panic("impossible state in forwardCommand")
 
 	default:
-		leader, ok := s.configuration.Get(s.leader)
+		leader, ok := s.config.get(s.leader)
 		if !ok {
 			panic("invalid state in peers")
 		}
@@ -368,7 +368,7 @@ func (s *Server) forwardConfiguration(t configurationTuple) {
 		panic("impossible state in forwardConfiguration")
 
 	default:
-		leader, ok := s.configuration.Get(s.leader)
+		leader, ok := s.config.get(s.leader)
 		if !ok {
 			panic("invalid state in peers")
 		}
@@ -393,7 +393,7 @@ func (s *Server) followerSelect() {
 		case <-s.electionTick:
 			// 5.2 Leader election: "A follower increments its current term and
 			// transitions to candidate state."
-			if s.configuration == nil {
+			if s.config == nil {
 				s.logGeneric("election timeout, but no configuration: ignoring")
 				s.resetElectionTimeout()
 				continue
@@ -452,7 +452,7 @@ func (s *Server) candidateSelect() {
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
 
-	tuples, canceler := s.configuration.AllPeers().Except(s.id).requestVotes(RequestVote{
+	tuples, canceler := s.config.allPeers().Except(s.id).requestVotes(RequestVote{
 		Term:         s.term,
 		CandidateId:  s.id,
 		LastLogIndex: s.log.lastIndex(),
@@ -463,10 +463,10 @@ func (s *Server) candidateSelect() {
 	// Set up vote tallies (plus, vote for myself)
 	votes := map[uint64]bool{s.id: true}
 	s.vote = s.id
-	s.logGeneric("term=%d election started (configuration state %s)", s.term, s.configuration.state)
+	s.logGeneric("term=%d election started (configuration state %s)", s.term, s.config.state)
 
 	// catch a weird state
-	if s.configuration.Pass(votes) {
+	if s.config.pass(votes) {
 		s.logGeneric("I immediately won the election")
 		s.leader = s.id
 		s.state.Set(Leader)
@@ -509,7 +509,7 @@ func (s *Server) candidateSelect() {
 				votes[t.id] = true
 			}
 			// "Once a candidate wins an election, it becomes leader."
-			if s.configuration.Pass(votes) {
+			if s.config.pass(votes) {
 				s.logGeneric("I won the election")
 				s.leader = s.id
 				s.state.Set(Leader)
@@ -752,7 +752,7 @@ func (s *Server) leaderSelect() {
 	// doing the decrement. This was just annoying, except if you manage to
 	// sneak in a command before the first heartbeat. Then, it will never get
 	// properly replicated (it seemed).
-	ni := newNextIndex(s.configuration.AllPeers().Except(s.id), s.log.lastIndex()) // +1)
+	ni := newNextIndex(s.config.allPeers().Except(s.id), s.log.lastIndex()) // +1)
 
 	flush := make(chan struct{})
 	heartbeat := time.NewTicker(BroadcastInterval())
@@ -799,13 +799,13 @@ func (s *Server) leaderSelect() {
 
 		case t := <-s.configurationChan:
 			// Attempt to change our local configuration
-			if err := s.configuration.ChangeTo(t.Peers); err != nil {
+			if err := s.config.changeTo(t.Peers); err != nil {
 				t.Err <- err
 				continue
 			}
 
 			// Serialize the local (C_old,new) configuration
-			encodedConfiguration, err := s.configuration.Encode()
+			encodedConfiguration, err := s.config.encode()
 			if err != nil {
 				t.Err <- err
 				continue
@@ -823,11 +823,11 @@ func (s *Server) leaderSelect() {
 			go func() {
 				committed := <-entry.committed
 				if !committed {
-					s.configuration.ChangeAborted()
+					s.config.changeAborted()
 					return
 				}
-				s.configuration.ChangeCommitted()
-				if _, ok := s.configuration.AllPeers()[s.Id()]; !ok {
+				s.config.changeCommitted()
+				if _, ok := s.config.allPeers()[s.Id()]; !ok {
 					s.logGeneric("leader expelled; shutting down")
 					q := make(chan struct{})
 					s.quit <- q
@@ -845,7 +845,7 @@ func (s *Server) leaderSelect() {
 			// After every flush, we check if we can advance our commitIndex.
 			// If so, we do it, and trigger another flush ASAP.
 			// A flush can cause us to be deposed.
-			recipients := s.configuration.AllPeers().Except(s.id)
+			recipients := s.config.allPeers().Except(s.id)
 
 			// Special case: network of 1
 			if len(recipients) <= 0 {
@@ -1102,7 +1102,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 		// uses that configuration for all future decisions (it does not wait
 		// for the entry to become committed)."
 		if entry.isConfiguration {
-			if err := s.configuration.DirectSet(peers); err != nil {
+			if err := s.config.directSet(peers); err != nil {
 				return AppendEntriesResponse{
 					Term:    s.term,
 					Success: false,

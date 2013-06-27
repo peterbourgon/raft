@@ -18,25 +18,29 @@ const (
 	OldNew = "C_old,new"
 )
 
-type Configuration struct {
+// configuration represents the sets of peers and behaviors required to
+// implement joint-consensus.
+type configuration struct {
 	sync.RWMutex
 	state string
 	c_old Peers
 	c_new Peers
 }
 
-func NewConfiguration(peers Peers) *Configuration {
-	return &Configuration{
+// newConfiguration returns a new configuration in stable (C_old) state based
+// on the passed peers.
+func newConfiguration(peers Peers) *configuration {
+	return &configuration{
 		state: Old,   // start in a stable state,
 		c_old: peers, // with only C_old
 	}
 }
 
-// DirectSet is used when bootstrapping, and when receiving a replicated
+// directSet is used when bootstrapping, and when receiving a replicated
 // configuration from a leader. It directly sets the configuration to the
 // passed peers. It's assumed this is called on a non-leader, and therefore
 // requires no consistency dance.
-func (c *Configuration) DirectSet(peers Peers) error {
+func (c *configuration) directSet(peers Peers) error {
 	c.Lock()
 	defer c.Unlock()
 
@@ -46,7 +50,7 @@ func (c *Configuration) DirectSet(peers Peers) error {
 	return nil
 }
 
-func (c *Configuration) Get(id uint64) (Peer, bool) {
+func (c *configuration) get(id uint64) (Peer, bool) {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -59,16 +63,16 @@ func (c *Configuration) Get(id uint64) (Peer, bool) {
 	return nil, false
 }
 
-func (c *Configuration) Encode() ([]byte, error) {
+func (c *configuration) encode() ([]byte, error) {
 	buf := &bytes.Buffer{}
-	if err := gob.NewEncoder(buf).Encode(c.AllPeers()); err != nil {
+	if err := gob.NewEncoder(buf).Encode(c.allPeers()); err != nil {
 		return []byte{}, err
 	}
 	return buf.Bytes(), nil
 }
 
-// AllPeers returns the union set of all peers in the Configuration.
-func (c *Configuration) AllPeers() Peers {
+// allPeers returns the union set of all peers in the configuration.
+func (c *configuration) allPeers() Peers {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -82,10 +86,10 @@ func (c *Configuration) AllPeers() Peers {
 	return union
 }
 
-// Pass returns true if the votes represented by the votes map are sufficient
-// to constitute a quorum. Pass respects C_old,new requirements, which dictate
+// pass returns true if the votes represented by the votes map are sufficient
+// to constitute a quorum. pass respects C_old,new requirements, which dictate
 // that any request must receive a majority from both C_old and C_new to pass.
-func (c *Configuration) Pass(votes map[uint64]bool) bool {
+func (c *configuration) pass(votes map[uint64]bool) bool {
 	c.RLock()
 	defer c.RUnlock()
 
@@ -112,7 +116,7 @@ func (c *Configuration) Pass(votes map[uint64]bool) bool {
 
 	// Not in C_old, so make sure we have some peers in C_new
 	if len(c.c_new) <= 0 {
-		panic(fmt.Sprintf("Configuration state '%s', but no C_new peers", c.state))
+		panic(fmt.Sprintf("configuration state '%s', but no C_new peers", c.state))
 	}
 
 	// Since we're in C_old,new, we need to also pass C_new to pass overall.
@@ -132,10 +136,10 @@ func (c *Configuration) Pass(votes map[uint64]bool) bool {
 	return c_newHave >= c_newRequired
 }
 
-// ChangeTo signals a request to change to the configuration represented by the
-// passed peers. ChangeTo puts the Configuration in the C_old,new state.
-// ChangeTo should be eventually followed by ChangeCommitted or ChangeAborted.
-func (c *Configuration) ChangeTo(peers Peers) error {
+// changeTo signals a request to change to the configuration represented by the
+// passed peers. changeTo puts the configuration in the C_old,new state.
+// changeTo should be eventually followed by ChangeCommitted or ChangeAborted.
+func (c *configuration) changeTo(peers Peers) error {
 	c.Lock()
 	defer c.Unlock()
 
@@ -144,7 +148,7 @@ func (c *Configuration) ChangeTo(peers Peers) error {
 	}
 
 	if len(c.c_new) > 0 {
-		panic(fmt.Sprintf("Configuration ChangeTo in state '%s', but have C_new peers already", c.state))
+		panic(fmt.Sprintf("configuration ChangeTo in state '%s', but have C_new peers already", c.state))
 	}
 
 	c.c_new = peers
@@ -152,17 +156,17 @@ func (c *Configuration) ChangeTo(peers Peers) error {
 	return nil
 }
 
-// ChangeCommitted moves a Configuration from C_old,new to C_new.
-func (c *Configuration) ChangeCommitted() {
+// changeCommitted moves a configuration from C_old,new to C_new.
+func (c *configuration) changeCommitted() {
 	c.Lock()
 	defer c.Unlock()
 
 	if c.state != OldNew {
-		panic("Configuration ChangeCommitted, but not in C_old,new")
+		panic("configuration ChangeCommitted, but not in C_old,new")
 	}
 
 	if len(c.c_new) <= 0 {
-		panic("Configuration ChangeCommitted, but C_new peers are empty")
+		panic("configuration ChangeCommitted, but C_new peers are empty")
 	}
 
 	c.c_old = c.c_new
@@ -170,13 +174,13 @@ func (c *Configuration) ChangeCommitted() {
 	c.state = Old
 }
 
-// ChangeAborted moves a Configuration from C_old,ew to C_old.
-func (c *Configuration) ChangeAborted() {
+// changeAborted moves a configuration from C_old,new to C_old.
+func (c *configuration) changeAborted() {
 	c.Lock()
 	defer c.Unlock()
 
 	if c.state != OldNew {
-		panic("Configuration ChangeAborted, but not in C_old,new")
+		panic("configuration ChangeAborted, but not in C_old,new")
 	}
 
 	c.c_new = Peers{}

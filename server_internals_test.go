@@ -122,8 +122,8 @@ func TestConfigurationReceipt(t *testing.T) {
 			entries:   []LogEntry{LogEntry{Index: 1, Term: 1}},
 			commitPos: 0,
 		},
-		state:         &protectedString{value: Follower},
-		configuration: NewConfiguration(Peers{}),
+		state:  &protectedString{value: Follower},
+		config: newConfiguration(Peers{}),
 	}
 
 	// receives a configuration change
@@ -161,10 +161,10 @@ func TestConfigurationReceipt(t *testing.T) {
 	}
 
 	// and the follower's configuration should be immediately updated
-	if expected, got := 3, s.configuration.AllPeers().Count(); expected != got {
+	if expected, got := 3, s.config.allPeers().Count(); expected != got {
 		t.Fatalf("follower peer count: expected %d, got %d", expected, got)
 	}
-	peer, ok := s.configuration.Get(3)
+	peer, ok := s.config.get(3)
 	if !ok {
 		t.Fatal("follower didn't get peer 3")
 	}
@@ -184,9 +184,9 @@ func TestNonLeaderExpulsion(t *testing.T) {
 			entries:   []LogEntry{LogEntry{Index: 1, Term: 1}},
 			commitPos: 0,
 		},
-		state:         &protectedString{value: Follower},
-		configuration: NewConfiguration(Peers{}),
-		quit:          make(chan chan struct{}),
+		state:  &protectedString{value: Follower},
+		config: newConfiguration(Peers{}),
+		quit:   make(chan chan struct{}),
 	}
 
 	// receives a configuration change that doesn't include itself
