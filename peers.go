@@ -6,9 +6,8 @@ import (
 )
 
 var (
-	ErrTimeout                = errors.New("timeout")
-	ErrInvalidRequest         = errors.New("invalid request")
-	ErrLocalPeerSerialization = errors.New("cannot serialize local peer")
+	ErrTimeout        = errors.New("timeout")
+	ErrInvalidRequest = errors.New("invalid request")
 )
 
 // Peer is the local representation of a remote node. It may be backed by any
@@ -22,30 +21,30 @@ type Peer interface {
 	SetConfiguration(Peers) error
 }
 
-// LocalPeer is the simplest kind of peer, mapped to a server in the
+// localPeer is the simplest kind of peer, mapped to a server in the
 // same process-space. Useful for testing and demonstration; not so
 // useful for networks of independent processes.
-type LocalPeer struct {
+type localPeer struct {
 	server *Server
 }
 
-func NewLocalPeer(server *Server) *LocalPeer { return &LocalPeer{server} }
+func newLocalPeer(server *Server) *localPeer { return &localPeer{server} }
 
-func (p *LocalPeer) Id() uint64 { return p.server.Id() }
+func (p *localPeer) Id() uint64 { return p.server.Id() }
 
-func (p *LocalPeer) AppendEntries(ae AppendEntries) AppendEntriesResponse {
-	return p.server.AppendEntries(ae)
+func (p *localPeer) AppendEntries(ae AppendEntries) AppendEntriesResponse {
+	return p.server.appendEntries(ae)
 }
 
-func (p *LocalPeer) RequestVote(rv RequestVote) RequestVoteResponse {
-	return p.server.RequestVote(rv)
+func (p *localPeer) RequestVote(rv RequestVote) RequestVoteResponse {
+	return p.server.requestVote(rv)
 }
 
-func (p *LocalPeer) Command(cmd []byte, response chan []byte) error {
-	return p.server.Command(cmd, response)
+func (p *localPeer) Command(cmd []byte, response chan []byte) error {
+	return p.server.command(cmd, response)
 }
 
-func (p *LocalPeer) SetConfiguration(peers Peers) error {
+func (p *localPeer) SetConfiguration(peers Peers) error {
 	return p.server.SetConfiguration(peers)
 }
 
@@ -67,7 +66,8 @@ func requestVoteTimeout(p Peer, rv RequestVote, timeout time.Duration) (RequestV
 // functions for actions that should apply to multiple Peers.
 type Peers map[uint64]Peer
 
-// MakePeers returns a Peers structure from the passed (vararg) list of peers.
+// MakePeers is a simple helper function to construct a Peers structure from the
+// passed list of peers.
 func MakePeers(peers ...Peer) Peers {
 	p := Peers{}
 	for _, peer := range peers {
@@ -76,7 +76,7 @@ func MakePeers(peers ...Peer) Peers {
 	return p
 }
 
-func (p Peers) Except(id uint64) Peers {
+func (p Peers) except(id uint64) Peers {
 	except := Peers{}
 	for id0, peer := range p {
 		if id0 == id {
@@ -87,9 +87,9 @@ func (p Peers) Except(id uint64) Peers {
 	return except
 }
 
-func (p Peers) Count() int { return len(p) }
+func (p Peers) count() int { return len(p) }
 
-func (p Peers) Quorum() int {
+func (p Peers) quorum() int {
 	switch n := len(p); n {
 	case 0, 1:
 		return 1
@@ -129,7 +129,7 @@ func (p Peers) requestVotes(r RequestVote) (chan voteResponseTuple, canceler) {
 			tupleChan0 := make(chan voteResponseTuple, len(notYetResponded))
 			for id, peer := range notYetResponded {
 				go func(id0 uint64, peer0 Peer) {
-					resp, err := requestVoteTimeout(peer0, r, 2*BroadcastInterval())
+					resp, err := requestVoteTimeout(peer0, r, 2*MaximumElectionTimeout())
 					tupleChan0 <- voteResponseTuple{id0, resp, err}
 				}(id, peer)
 			}

@@ -1,11 +1,10 @@
-package raft_test
+package raft
 
 import (
 	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/peterbourgon/raft"
 	"io"
 	"log"
 	"math/rand"
@@ -21,38 +20,34 @@ func init() {
 	log.SetFlags(log.Lmicroseconds)
 }
 
-func noop(uint64, []byte) []byte {
-	return []byte{}
-}
-
 func TestFollowerToCandidate(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
-	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := ResetElectionTimeoutMs(25, 50)
+	defer ResetElectionTimeoutMs(oldMin, oldMax)
 
-	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetConfiguration(raft.MakePeers(
-		raft.NewLocalPeer(server),
+	server := NewServer(1, &bytes.Buffer{}, noop)
+	server.SetConfiguration(MakePeers(
+		newLocalPeer(server),
 		nonresponsivePeer(2),
 		nonresponsivePeer(3),
 	))
 
 	server.Start()
 	defer server.Stop()
-	if server.State() != raft.Follower {
+	if server.state.Get() != Follower {
 		t.Fatalf("didn't start as Follower")
 	}
 
-	time.Sleep(raft.MaximumElectionTimeout())
+	time.Sleep(MaximumElectionTimeout())
 
-	cutoff := time.Now().Add(2 * raft.MinimumElectionTimeout())
-	backoff := raft.BroadcastInterval()
+	cutoff := time.Now().Add(2 * MinimumElectionTimeout())
+	backoff := MinimumElectionTimeout()
 	for {
 		if time.Now().After(cutoff) {
 			t.Fatal("failed to become Candidate")
 		}
-		if state := server.State(); state != raft.Candidate {
+		if state := server.state.Get(); state != Candidate {
 			time.Sleep(backoff)
 			backoff *= 2
 			continue
@@ -65,27 +60,27 @@ func TestFollowerToCandidate(t *testing.T) {
 func TestCandidateToLeader(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
-	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := ResetElectionTimeoutMs(25, 50)
+	defer ResetElectionTimeoutMs(oldMin, oldMax)
 
-	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetConfiguration(raft.MakePeers(
-		raft.NewLocalPeer(server),
+	server := NewServer(1, &bytes.Buffer{}, noop)
+	server.SetConfiguration(MakePeers(
+		newLocalPeer(server),
 		approvingPeer(2),
 		nonresponsivePeer(3),
 	))
 
 	server.Start()
 	defer server.Stop()
-	time.Sleep(raft.MaximumElectionTimeout())
+	time.Sleep(MaximumElectionTimeout())
 
-	cutoff := time.Now().Add(2 * raft.MaximumElectionTimeout())
-	backoff := raft.BroadcastInterval()
+	cutoff := time.Now().Add(2 * MaximumElectionTimeout())
+	backoff := MaximumElectionTimeout()
 	for {
 		if time.Now().After(cutoff) {
 			t.Fatal("failed to become Leader")
 		}
-		if state := server.State(); state != raft.Leader {
+		if state := server.state.Get(); state != Leader {
 			time.Sleep(backoff)
 			backoff *= 2
 			continue
@@ -98,24 +93,24 @@ func TestCandidateToLeader(t *testing.T) {
 func TestFailedElection(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
-	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := ResetElectionTimeoutMs(25, 50)
+	defer ResetElectionTimeoutMs(oldMin, oldMax)
 
-	server := raft.NewServer(1, &bytes.Buffer{}, noop)
-	server.SetConfiguration(raft.MakePeers(
-		raft.NewLocalPeer(server),
+	server := NewServer(1, &bytes.Buffer{}, noop)
+	server.SetConfiguration(MakePeers(
+		newLocalPeer(server),
 		disapprovingPeer(2),
 		nonresponsivePeer(3),
 	))
 
 	server.Start()
 	defer server.Stop()
-	time.Sleep(2 * raft.ElectionTimeout())
+	time.Sleep(2 * ElectionTimeout())
 
-	if server.State() == raft.Leader {
+	if server.state.Get() == Leader {
 		t.Fatalf("erroneously became Leader")
 	}
-	t.Logf("remained %s", server.State())
+	t.Logf("remained %s", server.state.Get())
 }
 
 func TestLeaderExpulsion(t *testing.T) {
@@ -130,8 +125,8 @@ func TestSimpleConsensus(t *testing.T) {
 	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
 	defer printOnFailure(t, logBuffer)
-	oldMin, oldMax := raft.ResetElectionTimeoutMs(25, 50)
-	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := ResetElectionTimeoutMs(25, 50)
+	defer ResetElectionTimeoutMs(oldMin, oldMax)
 
 	type SetValue struct {
 		Value int32 `json:"value"`
@@ -154,9 +149,9 @@ func TestSimpleConsensus(t *testing.T) {
 		}
 	}
 
-	s1 := raft.NewServer(1, &bytes.Buffer{}, applyValue(1, &i1))
-	s2 := raft.NewServer(2, &bytes.Buffer{}, applyValue(2, &i2))
-	s3 := raft.NewServer(3, &bytes.Buffer{}, applyValue(3, &i3))
+	s1 := NewServer(1, &bytes.Buffer{}, applyValue(1, &i1))
+	s2 := NewServer(2, &bytes.Buffer{}, applyValue(2, &i2))
+	s3 := NewServer(3, &bytes.Buffer{}, applyValue(3, &i3))
 
 	s1Responses := &synchronizedBuffer{}
 	s2Responses := &synchronizedBuffer{}
@@ -165,11 +160,10 @@ func TestSimpleConsensus(t *testing.T) {
 	defer func(sb *synchronizedBuffer) { t.Logf("s2 responses: %s", sb.String()) }(s2Responses)
 	defer func(sb *synchronizedBuffer) { t.Logf("s3 responses: %s", sb.String()) }(s3Responses)
 
-	peers := raft.MakePeers(
-		raft.NewLocalPeer(s1),
-		raft.NewLocalPeer(s2),
-		raft.NewLocalPeer(s3),
-	)
+	p1 := newLocalPeer(s1)
+	p2 := newLocalPeer(s2)
+	p3 := newLocalPeer(s3)
+	peers := MakePeers(p1, p2, p3)
 	s1.SetConfiguration(peers)
 	s2.SetConfiguration(peers)
 	s3.SetConfiguration(peers)
@@ -187,11 +181,11 @@ func TestSimpleConsensus(t *testing.T) {
 	response := make(chan []byte, 1)
 	func() {
 		for {
-			switch err := s1.Command(cmd, response); err {
+			switch err := p1.Command(cmd, response); err {
 			case nil:
 				return
-			case raft.ErrUnknownLeader:
-				time.Sleep(raft.MinimumElectionTimeout())
+			case ErrUnknownLeader:
+				time.Sleep(MinimumElectionTimeout())
 			default:
 				t.Fatal(err)
 			}
@@ -205,7 +199,7 @@ func TestSimpleConsensus(t *testing.T) {
 		t.Logf("didn't receive command response")
 	}
 
-	ticker := time.Tick(raft.BroadcastInterval())
+	ticker := time.Tick(MaximumElectionTimeout())
 	timeout := time.After(1 * time.Second)
 	for {
 		select {
@@ -254,8 +248,8 @@ func testOrderTimeout(t *testing.T, nServers int, timeout time.Duration) {
 	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
 	defer printOnFailure(t, logBuffer)
-	oldMin, oldMax := raft.ResetElectionTimeoutMs(50, 100)
-	defer raft.ResetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := ResetElectionTimeoutMs(50, 100)
+	defer ResetElectionTimeoutMs(oldMin, oldMax)
 
 	done := make(chan struct{})
 	go func() { testOrder(t, nServers); close(done) }()
@@ -289,17 +283,17 @@ func testOrder(t *testing.T, nServers int) {
 	}
 
 	// set up the cluster
-	servers := []*raft.Server{}        // server components
+	servers := []*Server{}             // server components
 	storage := []*bytes.Buffer{}       // persistent log storage
 	buffers := []*synchronizedBuffer{} // the "state machine" for each server
 	for i := 0; i < nServers; i++ {
 		buffers = append(buffers, &synchronizedBuffer{})
 		storage = append(storage, &bytes.Buffer{})
-		servers = append(servers, raft.NewServer(uint64(i+1), storage[i], do(buffers[i])))
+		servers = append(servers, NewServer(uint64(i+1), storage[i], do(buffers[i])))
 	}
-	peers := raft.Peers{}
+	peers := Peers{}
 	for _, server := range servers {
-		peers[server.Id()] = raft.NewLocalPeer(server)
+		peers[server.Id()] = newLocalPeer(server)
 	}
 	for _, server := range servers {
 		server.SetConfiguration(peers)
@@ -321,7 +315,7 @@ func testOrder(t *testing.T, nServers int) {
 	// boot up the cluster
 	for _, server := range servers {
 		server.Start()
-		defer func(server0 *raft.Server) {
+		defer func(server0 *Server) {
 			log.Printf("issuing stop command to server %d", server0.Id())
 			server0.Stop()
 		}(server)
@@ -343,12 +337,12 @@ func testOrder(t *testing.T, nServers int) {
 				log.Printf("command=%d/%d peer=%d: OK", i+1, len(cmds), id)
 				break
 
-			case raft.ErrUnknownLeader, raft.ErrDeposed:
+			case ErrUnknownLeader, ErrDeposed:
 				log.Printf("command=%d/%d peer=%d: failed (%s) -- will retry", i+1, len(cmds), id, err)
-				time.Sleep(raft.ElectionTimeout())
+				time.Sleep(ElectionTimeout())
 				continue
 
-			case raft.ErrTimeout:
+			case ErrTimeout:
 				log.Printf("command=%d/%d peer=%d: timed out -- assume it went through", i+1, len(cmds), id)
 				break
 
@@ -376,7 +370,7 @@ func testOrder(t *testing.T, nServers int) {
 			expected, got := expectedBuffer.String(), sb.String()
 			if len(got) < len(expected) {
 				t.Logf("server %d: not yet fully replicated, will check again", i+1)
-				time.Sleep(raft.BroadcastInterval())
+				time.Sleep(MaximumElectionTimeout())
 				continue // retry
 			}
 			if expected != got {
@@ -427,27 +421,27 @@ func (b *synchronizedBuffer) String() string {
 type nonresponsivePeer uint64
 
 func (p nonresponsivePeer) Id() uint64 { return uint64(p) }
-func (p nonresponsivePeer) AppendEntries(raft.AppendEntries) raft.AppendEntriesResponse {
-	return raft.AppendEntriesResponse{}
+func (p nonresponsivePeer) AppendEntries(AppendEntries) AppendEntriesResponse {
+	return AppendEntriesResponse{}
 }
-func (p nonresponsivePeer) RequestVote(raft.RequestVote) raft.RequestVoteResponse {
-	return raft.RequestVoteResponse{}
+func (p nonresponsivePeer) RequestVote(RequestVote) RequestVoteResponse {
+	return RequestVoteResponse{}
 }
 func (p nonresponsivePeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
-func (p nonresponsivePeer) SetConfiguration(raft.Peers) error {
+func (p nonresponsivePeer) SetConfiguration(Peers) error {
 	return fmt.Errorf("not implemented")
 }
 
 type approvingPeer uint64
 
 func (p approvingPeer) Id() uint64 { return uint64(p) }
-func (p approvingPeer) AppendEntries(raft.AppendEntries) raft.AppendEntriesResponse {
-	return raft.AppendEntriesResponse{}
+func (p approvingPeer) AppendEntries(AppendEntries) AppendEntriesResponse {
+	return AppendEntriesResponse{}
 }
-func (p approvingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteResponse {
-	return raft.RequestVoteResponse{
+func (p approvingPeer) RequestVote(rv RequestVote) RequestVoteResponse {
+	return RequestVoteResponse{
 		Term:        rv.Term,
 		VoteGranted: true,
 	}
@@ -455,18 +449,18 @@ func (p approvingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteResponse
 func (p approvingPeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
-func (p approvingPeer) SetConfiguration(raft.Peers) error {
+func (p approvingPeer) SetConfiguration(Peers) error {
 	return fmt.Errorf("not implemented")
 }
 
 type disapprovingPeer uint64
 
 func (p disapprovingPeer) Id() uint64 { return uint64(p) }
-func (p disapprovingPeer) AppendEntries(raft.AppendEntries) raft.AppendEntriesResponse {
-	return raft.AppendEntriesResponse{}
+func (p disapprovingPeer) AppendEntries(AppendEntries) AppendEntriesResponse {
+	return AppendEntriesResponse{}
 }
-func (p disapprovingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteResponse {
-	return raft.RequestVoteResponse{
+func (p disapprovingPeer) RequestVote(rv RequestVote) RequestVoteResponse {
+	return RequestVoteResponse{
 		Term:        rv.Term,
 		VoteGranted: false,
 	}
@@ -474,6 +468,6 @@ func (p disapprovingPeer) RequestVote(rv raft.RequestVote) raft.RequestVoteRespo
 func (p disapprovingPeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
-func (p disapprovingPeer) SetConfiguration(raft.Peers) error {
+func (p disapprovingPeer) SetConfiguration(Peers) error {
 	return fmt.Errorf("not implemented")
 }

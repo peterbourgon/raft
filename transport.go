@@ -58,7 +58,7 @@ func (t *HTTPTransport) appendEntriesHandler(s *Server) http.HandlerFunc {
 			return
 		}
 
-		aer := s.AppendEntries(ae)
+		aer := s.appendEntries(ae)
 		if err := json.NewEncoder(w).Encode(aer); err != nil {
 			http.Error(w, emptyAppendEntriesResponse.String(), http.StatusInternalServerError)
 			return
@@ -76,7 +76,7 @@ func (t *HTTPTransport) requestVoteHandler(s *Server) http.HandlerFunc {
 			return
 		}
 
-		rvr := s.RequestVote(rv)
+		rvr := s.requestVote(rv)
 		if err := json.NewEncoder(w).Encode(rvr); err != nil {
 			http.Error(w, emptyRequestVoteResponse.String(), http.StatusInternalServerError)
 			return
@@ -98,7 +98,7 @@ func (t *HTTPTransport) commandHandler(s *Server) http.HandlerFunc {
 		}
 
 		response := make(chan []byte, 1)
-		if err := s.Command(cmd, response); err != nil {
+		if err := s.command(cmd, response); err != nil {
 			http.Error(w, "", http.StatusInternalServerError)
 			return
 		}
@@ -142,10 +142,7 @@ type commaError struct {
 	Success bool   `json:"success,omitempty"`
 }
 
-//
-//
-//
-
+// TODO
 type HTTPPeer struct {
 	id  uint64
 	url url.URL
@@ -183,20 +180,24 @@ func NewHTTPPeer(u url.URL) (*HTTPPeer, error) {
 	}, nil
 }
 
+// TODO
 func (p *HTTPPeer) Id() uint64 { return p.id }
 
+// TODO
 func (p *HTTPPeer) AppendEntries(ae AppendEntries) AppendEntriesResponse {
 	var aer AppendEntriesResponse
 	p.rpc(ae, AppendEntriesPath, &aer)
 	return aer
 }
 
+// TODO
 func (p *HTTPPeer) RequestVote(rv RequestVote) RequestVoteResponse {
 	var rvr RequestVoteResponse
 	p.rpc(rv, RequestVotePath, &rvr)
 	return rvr
 }
 
+// TODO
 func (p *HTTPPeer) Command(cmd []byte, response chan []byte) error {
 	go func() {
 		var responseBuf bytes.Buffer
@@ -206,6 +207,7 @@ func (p *HTTPPeer) Command(cmd []byte, response chan []byte) error {
 	return nil // TODO could make this smarter (i.e. timeout), with more work
 }
 
+// TODO
 func (p *HTTPPeer) SetConfiguration(peers Peers) error {
 	buf := &bytes.Buffer{}
 	if err := gob.NewEncoder(buf).Encode(&peers); err != nil {
@@ -221,6 +223,7 @@ func (p *HTTPPeer) SetConfiguration(peers Peers) error {
 	return nil
 }
 
+// TODO
 func (p *HTTPPeer) rpc(request interface{}, path string, response interface{}) error {
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(request); err != nil {

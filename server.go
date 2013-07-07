@@ -50,34 +50,30 @@ func ResetElectionTimeoutMs(newMin, newMax int) (int, int) {
 	return int(oldMin), int(oldMax)
 }
 
-// MinimumElectionTimeout returns a constant time.Duration, which is the
-// MinimumElectionTimeMs (in milliseconds). This function exists so you can
-// set raft.MinimumElectionTimeMs in your client, and make decisions in your
-// code path without having to explicitly convert.
+// MinimumElectionTimeout returns the current minimum election timeout.
+// This is an exported function primarily to help in testing.
 func MinimumElectionTimeout() time.Duration {
 	return time.Duration(minimumElectionTimeoutMs) * time.Millisecond
 }
 
-// MaximumElectionTimeout returns a constant time.Duration, which is the
-// MaximumElectionTimeMs (in milliseconds). This function exists so you can
-// set raft.MaximumElectionTimeMs in your client, and make decisions in your
-// code path without having to explicitly convert.
+// MaximumElectionTimeout returns the current maximum election time.
+// This is an exported function primarily to help in testing.
 func MaximumElectionTimeout() time.Duration {
 	return time.Duration(maximumElectionTimeoutMs) * time.Millisecond
 }
 
-// ElectionTimeout returns a variable time.Duration, between
-// minimumElectionTimeoutMs and twice that value.
+// ElectionTimeout returns a variable time.Duration, between the minimum and
+// maximum election timeouts.
 func ElectionTimeout() time.Duration {
 	n := rand.Intn(int(maximumElectionTimeoutMs - minimumElectionTimeoutMs))
 	d := int(minimumElectionTimeoutMs) + n
 	return time.Duration(d) * time.Millisecond
 }
 
-// BroadcastInterval returns the interval between heartbeats (AppendEntry RPCs)
-// broadcast from the leader. It is minimumElectionTimeoutMs / 10, as dictated
-// by the spec: BroadcastInterval << ElectionTimeout << MTBF.
-func BroadcastInterval() time.Duration {
+// broadcastInterval returns the interval between heartbeats (AppendEntry RPCs)
+// broadcast from the leader. It is the minimum election timeout / 10, as
+// dictated by the spec: BroadcastInterval << ElectionTimeout << MTBF.
+func broadcastInterval() time.Duration {
 	d := minimumElectionTimeoutMs / 10
 	return time.Duration(d) * time.Millisecond
 }
@@ -128,7 +124,7 @@ type Server struct {
 	leader  uint64 // who we believe is the leader
 	term    uint64 // "current term number, which increases monotonically"
 	vote    uint64 // who we voted for this term, if applicable
-	log     *Log
+	log     *raftLog
 	config  *configuration
 
 	appendEntriesChan chan appendEntriesTuple
@@ -146,12 +142,10 @@ type Server struct {
 type ApplyFunc func(commitIndex uint64, cmd []byte) []byte
 
 // NewServer returns an initialized, un-started server. The ID must be unique in
-// the Raft network, and greater than 0. The transport will be used to
-// communicate to other servers in the network, and must be the same for the
-// entire network. The store will be used by the distributed log as a
-// persistence layer. The apply function will be called whenever a (user-domain)
-// command has been safely replicated to this server, and can be considered
-// committed.
+// the Raft network, and greater than 0. The store will be used by the
+// distributed log as a persistence layer. The apply function will be called
+// whenever a (user-domain) command has been safely replicated to this server,
+// and can be considered committed.
 func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 	if id <= 0 {
 		panic("server id must be > 0")
@@ -159,7 +153,7 @@ func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 
 	// 5.2 Leader election: "the latest term this server has seen is persisted,
 	// and is initialized to 0 on first boot.""
-	log := NewLog(store, a)
+	log := newRaftLog(store, a)
 	latestTerm := log.lastTerm()
 
 	s := &Server{
@@ -183,6 +177,7 @@ func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 	return s
 }
 
+// Id returns the ID of the server.
 func (s *Server) Id() uint64 { return s.id }
 
 type configurationTuple struct {
@@ -205,11 +200,6 @@ func (s *Server) SetConfiguration(peers Peers) error {
 	err := make(chan error)
 	s.configurationChan <- configurationTuple{peers, err}
 	return <-err
-}
-
-// State returns the current state: follower, candidate, or leader.
-func (s *Server) State() string {
-	return s.state.Get()
 }
 
 // Start triggers the server to begin communicating with its peers.
@@ -236,20 +226,14 @@ type commandTuple struct {
 // command gets committed to the local server log, it's passed to the apply
 // function, and the response from that function is provided on the
 // passed response chan.
-//
-// This is a public method only to facilitate the construction of peers
-// on arbitrary transports.
-func (s *Server) Command(cmd []byte, response chan []byte) error {
+func (s *Server) command(cmd []byte, response chan []byte) error {
 	err := make(chan error)
 	s.commandChan <- commandTuple{cmd, response, err}
 	return <-err
 }
 
 // AppendEntries processes the given RPC and returns the response.
-//
-// This is a public method only to facilitate the construction of peers
-// on arbitrary transports.
-func (s *Server) AppendEntries(ae AppendEntries) AppendEntriesResponse {
+func (s *Server) appendEntries(ae AppendEntries) AppendEntriesResponse {
 	t := appendEntriesTuple{
 		Request:  ae,
 		Response: make(chan AppendEntriesResponse),
@@ -259,10 +243,7 @@ func (s *Server) AppendEntries(ae AppendEntries) AppendEntriesResponse {
 }
 
 // RequestVote processes the given RPC and returns the response.
-//
-// This is a public method only to facilitate the construction of Peers
-// on arbitrary transports.
-func (s *Server) RequestVote(rv RequestVote) RequestVoteResponse {
+func (s *Server) requestVote(rv RequestVote) RequestVoteResponse {
 	t := requestVoteTuple{
 		Request:  rv,
 		Response: make(chan RequestVoteResponse),
@@ -292,7 +273,7 @@ func (s *Server) RequestVote(rv RequestVote) RequestVoteResponse {
 func (s *Server) loop() {
 	s.running.Set(true)
 	for s.running.Get() {
-		switch state := s.State(); state {
+		switch state := s.state.Get(); state {
 		case Follower:
 			s.followerSelect()
 		case Candidate:
@@ -310,7 +291,7 @@ func (s *Server) resetElectionTimeout() {
 }
 
 func (s *Server) logGeneric(format string, args ...interface{}) {
-	prefix := fmt.Sprintf("id=%d term=%d state=%s: ", s.id, s.term, s.State())
+	prefix := fmt.Sprintf("id=%d term=%d state=%s: ", s.id, s.term, s.state.Get())
 	log.Printf(prefix+format, args...)
 }
 
@@ -459,7 +440,7 @@ func (s *Server) candidateSelect() {
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
 
-	tuples, canceler := s.config.allPeers().Except(s.id).requestVotes(RequestVote{
+	tuples, canceler := s.config.allPeers().except(s.id).requestVotes(RequestVote{
 		Term:         s.term,
 		CandidateId:  s.id,
 		LastLogIndex: s.log.lastIndex(),
@@ -759,10 +740,10 @@ func (s *Server) leaderSelect() {
 	// doing the decrement. This was just annoying, except if you manage to
 	// sneak in a command before the first heartbeat. Then, it will never get
 	// properly replicated (it seemed).
-	ni := newNextIndex(s.config.allPeers().Except(s.id), s.log.lastIndex()) // +1)
+	ni := newNextIndex(s.config.allPeers().except(s.id), s.log.lastIndex()) // +1)
 
 	flush := make(chan struct{})
-	heartbeat := time.NewTicker(BroadcastInterval())
+	heartbeat := time.NewTicker(broadcastInterval())
 	defer heartbeat.Stop()
 	go func() {
 		for _ = range heartbeat.C {
@@ -780,7 +761,7 @@ func (s *Server) leaderSelect() {
 			// Append the command to our (leader) log
 			s.logGeneric("got command, appending")
 			currentTerm := s.term
-			entry := LogEntry{
+			entry := logEntry{
 				Index:           s.log.lastIndex() + 1,
 				Term:            currentTerm,
 				Command:         t.Command,
@@ -820,7 +801,7 @@ func (s *Server) leaderSelect() {
 
 			// We're gonna write+replicate that config via log mechanisms.
 			// Prepare the on-commit callback.
-			entry := LogEntry{
+			entry := logEntry{
 				Index:           s.log.lastIndex() + 1,
 				Term:            s.term,
 				Command:         encodedConfiguration,
@@ -852,7 +833,7 @@ func (s *Server) leaderSelect() {
 			// After every flush, we check if we can advance our commitIndex.
 			// If so, we do it, and trigger another flush ASAP.
 			// A flush can cause us to be deposed.
-			recipients := s.config.allPeers().Except(s.id)
+			recipients := s.config.allPeers().except(s.id)
 
 			// Special case: network of 1
 			if len(recipients) <= 0 {
@@ -868,7 +849,7 @@ func (s *Server) leaderSelect() {
 			}
 
 			// Normal case: network of at-least-2
-			successes, stepDown := s.concurrentFlush(recipients, ni, 2*BroadcastInterval())
+			successes, stepDown := s.concurrentFlush(recipients, ni, 2*broadcastInterval())
 			if stepDown {
 				s.logGeneric("deposed during flush")
 				s.state.Set(Follower)
@@ -955,7 +936,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 
 	// Special case: if we're the leader, and we haven't been deposed by a more
 	// recent term, then we should always deny the vote
-	if s.State() == Leader && !stepDown {
+	if s.state.Get() == Leader && !stepDown {
 		return RequestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
@@ -1030,7 +1011,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	// If the leader’s term (included in its RPC) is at least as large as the
 	// candidate’s current term, then the candidate recognizes the leader as
 	// legitimate and steps down, meaning that it returns to follower state."
-	if s.State() == Candidate && r.LeaderId != s.leader && r.Term >= s.term {
+	if s.state.Get() == Candidate && r.LeaderId != s.leader && r.Term >= s.term {
 		s.term = r.Term
 		s.vote = noVote
 		stepDown = true
@@ -1063,7 +1044,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 				panic("gob decode of peers failed")
 			}
 
-			if s.State() == Leader {
+			if s.state.Get() == Leader {
 				// TODO should we instead just ignore this entry?
 				return AppendEntriesResponse{
 					Term:    s.term,

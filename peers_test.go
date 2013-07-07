@@ -1,7 +1,6 @@
-package raft_test
+package raft
 
 import (
-	"github.com/peterbourgon/raft"
 	"testing"
 )
 
@@ -23,11 +22,11 @@ func TestQuorum(t *testing.T) {
 		{10, 6},
 		{11, 6},
 	} {
-		peers := raft.Peers{}
+		peers := Peers{}
 		for i := 0; i < tuple.n; i++ {
 			peers[uint64(i+1)] = nonresponsivePeer(i + 1)
 		}
-		if expected, got := tuple.expected, peers.Quorum(); expected != got {
+		if expected, got := tuple.expected, peers.quorum(); expected != got {
 			t.Errorf("Quorum of %d: expected %d, got %d", tuple.n, expected, got)
 		}
 	}

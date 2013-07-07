@@ -15,7 +15,7 @@ func TestFollowerAllegiance(t *testing.T) {
 		term:   5,
 		state:  &protectedString{value: Follower},
 		leader: 2,
-		log:    NewLog(&bytes.Buffer{}, noop),
+		log:    newRaftLog(&bytes.Buffer{}, noop),
 	}
 
 	// receives an AppendEntries from a future term and different leader
@@ -40,7 +40,7 @@ func TestStrongLeader(t *testing.T) {
 		term:   2,
 		state:  &protectedString{value: Leader},
 		leader: 1,
-		log:    NewLog(&bytes.Buffer{}, noop),
+		log:    newRaftLog(&bytes.Buffer{}, noop),
 	}
 
 	// receives a RequestVote from someone also in term=2
@@ -74,13 +74,13 @@ func TestLimitedClientPatience(t *testing.T) {
 
 func TestLenientCommit(t *testing.T) {
 	// a log that's fully committed
-	log := &Log{
-		entries: []LogEntry{
-			LogEntry{Index: 1, Term: 1},
-			LogEntry{Index: 2, Term: 1},
-			LogEntry{Index: 3, Term: 2},
-			LogEntry{Index: 4, Term: 2},
-			LogEntry{Index: 5, Term: 2},
+	log := &raftLog{
+		entries: []logEntry{
+			logEntry{Index: 1, Term: 1},
+			logEntry{Index: 2, Term: 1},
+			logEntry{Index: 3, Term: 2},
+			logEntry{Index: 4, Term: 2},
+			logEntry{Index: 5, Term: 2},
 		},
 		commitPos: 4,
 	}
@@ -118,8 +118,8 @@ func TestConfigurationReceipt(t *testing.T) {
 		id:     2,
 		term:   1,
 		leader: 1,
-		log: &Log{
-			entries:   []LogEntry{LogEntry{Index: 1, Term: 1}},
+		log: &raftLog{
+			entries:   []logEntry{logEntry{Index: 1, Term: 1}},
 			commitPos: 0,
 		},
 		state:  &protectedString{value: Follower},
@@ -144,8 +144,8 @@ func TestConfigurationReceipt(t *testing.T) {
 		LeaderId:     1,
 		PrevLogIndex: 1,
 		PrevLogTerm:  1,
-		Entries: []LogEntry{
-			LogEntry{
+		Entries: []logEntry{
+			logEntry{
 				Index:           2,
 				Term:            1,
 				Command:         configurationBuf.Bytes(),
@@ -161,7 +161,7 @@ func TestConfigurationReceipt(t *testing.T) {
 	}
 
 	// and the follower's configuration should be immediately updated
-	if expected, got := 3, s.config.allPeers().Count(); expected != got {
+	if expected, got := 3, s.config.allPeers().count(); expected != got {
 		t.Fatalf("follower peer count: expected %d, got %d", expected, got)
 	}
 	peer, ok := s.config.get(3)
@@ -179,9 +179,9 @@ func TestNonLeaderExpulsion(t *testing.T) {
 		id:     2,
 		term:   1,
 		leader: 1,
-		log: &Log{
+		log: &raftLog{
 			store:     &bytes.Buffer{},
-			entries:   []LogEntry{LogEntry{Index: 1, Term: 1}},
+			entries:   []logEntry{logEntry{Index: 1, Term: 1}},
 			commitPos: 0,
 		},
 		state:  &protectedString{value: Follower},
@@ -207,8 +207,8 @@ func TestNonLeaderExpulsion(t *testing.T) {
 		LeaderId:     1,
 		PrevLogIndex: 1,
 		PrevLogTerm:  1,
-		Entries: []LogEntry{
-			LogEntry{
+		Entries: []logEntry{
+			logEntry{
 				Index:           2,
 				Term:            1,
 				Command:         configurationBuf.Bytes(),
@@ -231,7 +231,7 @@ func TestNonLeaderExpulsion(t *testing.T) {
 	select {
 	case q := <-s.quit:
 		q <- struct{}{}
-	case <-time.After(5 * BroadcastInterval()):
+	case <-time.After(MaximumElectionTimeout()):
 		t.Fatal("didn't shut down")
 	}
 }
