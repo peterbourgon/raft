@@ -140,19 +140,26 @@ type Server struct {
 	quit         chan chan struct{}
 }
 
-// NewServer returns an initialized, un-started server.
-// The ID must be unique in the Raft network, and greater than 0.
-// The store will be used by the distributed log as a persistence layer.
-// The apply function will be called whenever a (user-domain) command has been
-// safely replicated to this server, and can be considered committed.
-func NewServer(id uint64, store io.ReadWriter, apply func(uint64, []byte) []byte) *Server {
+// ApplyFunc is called whenever a new command should be applied to the local
+// client's state machine. commitIndex is guaranteed to be gapless and
+// monotonically increasing, but duplicates may occur.
+type ApplyFunc func(commitIndex uint64, cmd []byte) []byte
+
+// NewServer returns an initialized, un-started server. The ID must be unique in
+// the Raft network, and greater than 0. The transport will be used to
+// communicate to other servers in the network, and must be the same for the
+// entire network. The store will be used by the distributed log as a
+// persistence layer. The apply function will be called whenever a (user-domain)
+// command has been safely replicated to this server, and can be considered
+// committed.
+func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 	if id <= 0 {
 		panic("server id must be > 0")
 	}
 
 	// 5.2 Leader election: "the latest term this server has seen is persisted,
 	// and is initialized to 0 on first boot.""
-	log := NewLog(store, apply)
+	log := NewLog(store, a)
 	latestTerm := log.lastTerm()
 
 	s := &Server{

@@ -11,11 +11,9 @@ var (
 	ErrLocalPeerSerialization = errors.New("cannot serialize local peer")
 )
 
-// Peer is anything which provides a Raft-domain interface to a server. Peer is
-// an interface to facilitate making servers available over different transport
-// mechanisms (e.g. pure local, net/rpc, Protobufs, HTTP...). All peers should
-// be 1:1 with a server. Things that implement Peer exist in the process-space
-// of the local Raft node.
+// Peer is the local representation of a remote node. It may be backed by any
+// concrete transport: HTTP, net/rpc, etc. It provides a Raft-domain interface
+// to a server. Peers must be encoding/gob encodable.
 type Peer interface {
 	Id() uint64
 	AppendEntries(AppendEntries) AppendEntriesResponse
