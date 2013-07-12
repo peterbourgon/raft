@@ -15,7 +15,7 @@ type AppendEntries struct {
 	LeaderId     uint64     `json:"leader_id"`
 	PrevLogIndex uint64     `json:"prev_log_index"`
 	PrevLogTerm  uint64     `json:"prev_log_term"`
-	Entries      []LogEntry `json:"entries"`
+	Entries      []logEntry `json:"entries"`
 	CommitIndex  uint64     `json:"commit_index"`
 }
 

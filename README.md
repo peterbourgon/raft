@@ -2,6 +2,7 @@
 
 This is an implementation of the [Raft distributed consensus protocol][paper].
 It's heavily influenced by [benbjohnson's implementation][goraft].
+It focuses on providing a clean and usable API, and well-structured internals.
 
 [![Build Status][buildimg]][buildurl]
 
@@ -12,72 +13,30 @@ It's heavily influenced by [benbjohnson's implementation][goraft].
 
 ## Usage
 
-A node in a Raft network is represented by a [Server][server] component. In a
-typical application, nodes will create and start a Server, and expose it to
-other nodes using a [Peer][peer] interface.
+A node in a Raft network is represented by a [Server][server] structure. In a
+typical application, nodes will create a Server, and expose it to other nodes
+using a [Peer][peer] interface.
 
 [server]: http://godoc.org/github.com/peterbourgon/raft#Server
 [peer]: http://godoc.org/github.com/peterbourgon/raft#Peer
 
-The core raft package includes a [LocalPeer][localpeer] wrapper, which provides
-a Peer interface to a Server within the same process-space. This is intended
-for testing and demonstration purposes.
+The core raft package includes a [Local Peer][localpeer] wrapper, which provides
+a Peer interface to a Server within the same process-space. This is really only
+useful for testing and demonstration purposes.
 
 [localpeer]: http://godoc.org/github.com/peterbourgon/raft#LocalPeer
 
 For real-life applications, you'll probably want to expose your Server via some
-kind of network transport. This library includes a [HTTP transport][http] which
-exposes a Raft server via REST-ish endpoints. For now, it's the simplest way to
-embed a Raft server in your application.
+kind of network transport. This library includes a [HTTP Transport][httpt]
+(ingress) and [HTTP Peer][httpp] (egress) which combine to allow communication
+via REST-ish endpoints. For now, it's the simplest way to embed a Raft server in
+your application. See [this complete example][example-http].
 
-[http]: http://godoc.org/github.com/peterbourgon/raft/http
+[httpt]: http://godoc.org/github.com/peterbourgon/raft#HTTPTransport
+[httpp]: http://godoc.org/github.com/peterbourgon/raft#HTTPPeer
+[example-http]: http://godoc.org/github.com/peterbourgon/raft#_example_HTTPNode
 
-```go
-import (
-	"github.com/peterbourgon/raft"
-	"github.com/peterbourgon/raft/http"
-	"net/http"
-)
-
-// This callback should apply the passed command to your state machine.
-func apply(commitIndex uint64, cmd []byte) []byte {
-	return []byte{}
-}
-
-func main() {
-	// Create the Raft server
-	id := 123
-	store := &bytes.Buffer{}
-	raftServer := raft.NewServer(id, store, apply)
-	raftServer.SetConfiguration(peers) // from some external source
-
-	// Create the HTTP server
-	mux := http.NewServeMux()
-	httpServer := &http.Server{
-		Addr:    "127.0.0.1:8080",
-		Handler: mux,
-	}
-
-	// Create and install the HTTP/Raft transport bridge
-	rafthttpServer := rafthttp.NewServer(raftServer)
-	rafthttpServer.Install(mux)
-
-	// Start everything
-	go httpServer.ListenAndServe()
-	raftServer.Start()
-	defer raftServer.Stop()
-
-	// Now you can issue commands.
-	raftServer.Command([]byte(`SET VALUE 100`))
-
-	// When the command is successfully (safely) replicated, the `apply`
-	// callback will get triggered, and you'll update your state machine.
-
-	select {}
-}
-```
-
-Several other transport bridges are coming; see TODO, below.
+Several other transports are coming; see TODO, below.
 
 
 ## Adding and removing nodes

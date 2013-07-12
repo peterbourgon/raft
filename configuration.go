@@ -14,8 +14,8 @@ var (
 )
 
 const (
-	Old    = "C_old"
-	OldNew = "C_old,new"
+	cOld    = "C_old"
+	cOldNew = "C_old,new"
 )
 
 // configuration represents the sets of peers and behaviors required to
@@ -31,7 +31,7 @@ type configuration struct {
 // on the passed peers.
 func newConfiguration(peers Peers) *configuration {
 	return &configuration{
-		state: Old,   // start in a stable state,
+		state: cOld,  // start in a stable state,
 		c_old: peers, // with only C_old
 	}
 }
@@ -46,7 +46,7 @@ func (c *configuration) directSet(peers Peers) error {
 
 	c.c_old = peers
 	c.c_new = Peers{}
-	c.state = Old
+	c.state = cOld
 	return nil
 }
 
@@ -94,7 +94,7 @@ func (c *configuration) pass(votes map[uint64]bool) bool {
 	defer c.RUnlock()
 
 	// Count the votes
-	c_oldHave, c_oldRequired := 0, c.c_old.Quorum()
+	c_oldHave, c_oldRequired := 0, c.c_old.quorum()
 	for id := range c.c_old {
 		if votes[id] {
 			c_oldHave++
@@ -110,7 +110,7 @@ func (c *configuration) pass(votes map[uint64]bool) bool {
 	}
 
 	// C_old passes: if we're in C_old, we pass
-	if c.state == Old {
+	if c.state == cOld {
 		return true
 	}
 
@@ -123,7 +123,7 @@ func (c *configuration) pass(votes map[uint64]bool) bool {
 	// It's important that we range through C_new and check our votes map, and
 	// not the other way around: if a server casts a vote but doesn't exist in
 	// a particular configuration, that vote should not be counted.
-	c_newHave, c_newRequired := 0, c.c_new.Quorum()
+	c_newHave, c_newRequired := 0, c.c_new.quorum()
 	for id := range c.c_new {
 		if votes[id] {
 			c_newHave++
@@ -143,7 +143,7 @@ func (c *configuration) changeTo(peers Peers) error {
 	c.Lock()
 	defer c.Unlock()
 
-	if c.state != Old {
+	if c.state != cOld {
 		return ErrConfigurationAlreadyChanging
 	}
 
@@ -152,7 +152,7 @@ func (c *configuration) changeTo(peers Peers) error {
 	}
 
 	c.c_new = peers
-	c.state = OldNew
+	c.state = cOldNew
 	return nil
 }
 
@@ -161,7 +161,7 @@ func (c *configuration) changeCommitted() {
 	c.Lock()
 	defer c.Unlock()
 
-	if c.state != OldNew {
+	if c.state != cOldNew {
 		panic("configuration ChangeCommitted, but not in C_old,new")
 	}
 
@@ -171,7 +171,7 @@ func (c *configuration) changeCommitted() {
 
 	c.c_old = c.c_new
 	c.c_new = Peers{}
-	c.state = Old
+	c.state = cOld
 }
 
 // changeAborted moves a configuration from C_old,new to C_old.
@@ -179,10 +179,10 @@ func (c *configuration) changeAborted() {
 	c.Lock()
 	defer c.Unlock()
 
-	if c.state != OldNew {
+	if c.state != cOldNew {
 		panic("configuration ChangeAborted, but not in C_old,new")
 	}
 
 	c.c_new = Peers{}
-	c.state = Old
+	c.state = cOld
 }
