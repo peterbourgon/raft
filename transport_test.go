@@ -16,6 +16,10 @@ func Test3ServersOverHTTP(t *testing.T) {
 	testNServersOverHTTP(t, 3)
 }
 
+func Test8ServersOverHTTP(t *testing.T) {
+	testNServersOverHTTP(t, 8)
+}
+
 func testNServersOverHTTP(t *testing.T, n int) {
 	if n <= 0 {
 		t.Fatalf("n <= 0")
@@ -48,7 +52,9 @@ func testNServersOverHTTP(t *testing.T, n int) {
 
 		// bind the HTTP transport to a concrete HTTP server
 		httpServers[i] = httptest.NewServer(mux)
-		defer httpServers[i].Close()
+		// TODO this sometimes hangs, presuambly because we still have open
+		// (active?) connections. Need to debug that.
+		//defer httpServers[i].Close()
 
 		// we have to start the HTTP server, so the NewHTTPPeer ID check works
 		// (it can work without starting the actual Raft protocol server)
@@ -81,7 +87,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 	}
 
 	// wait for them to organize
-	time.Sleep(2 * time.Duration(n) * maximumElectionTimeout())
+	time.Sleep(time.Duration(n) * maximumElectionTimeout())
 
 	// send a command into the network
 	cmd := []byte(`{"do_something":true}`)
@@ -102,7 +108,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 	for i := 0; i < len(stateMachines); i++ {
 		go func(i int) {
 			defer wg.Done()
-			backoff := 10 * time.Millisecond
+			backoff := 5 * time.Millisecond
 			for {
 				slice := stateMachines[i].Get()
 				if len(slice) != 1 {

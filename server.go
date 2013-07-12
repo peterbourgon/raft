@@ -26,8 +26,13 @@ const (
 )
 
 var (
-	minimumElectionTimeoutMs int32 = 250
-	maximumElectionTimeoutMs       = 2 * minimumElectionTimeoutMs
+	// MinimumElectionTimeoutMs can be set at package initialization. It may be
+	// raised to achieve more reliable replication in slow networks, or lowered
+	// to achieve faster replication in fast networks. Lowering is not
+	// recommended.
+	MinimumElectionTimeoutMs int32 = 250
+
+	maximumElectionTimeoutMs = 2 * MinimumElectionTimeoutMs
 )
 
 var (
@@ -43,16 +48,16 @@ var (
 // resetElectionTimeoutMs sets the minimum and maximum election timeouts to the
 // passed values, and returns the old values.
 func resetElectionTimeoutMs(newMin, newMax int) (int, int) {
-	oldMin := atomic.LoadInt32(&minimumElectionTimeoutMs)
+	oldMin := atomic.LoadInt32(&MinimumElectionTimeoutMs)
 	oldMax := atomic.LoadInt32(&maximumElectionTimeoutMs)
-	atomic.StoreInt32(&minimumElectionTimeoutMs, int32(newMin))
+	atomic.StoreInt32(&MinimumElectionTimeoutMs, int32(newMin))
 	atomic.StoreInt32(&maximumElectionTimeoutMs, int32(newMax))
 	return int(oldMin), int(oldMax)
 }
 
 // minimumElectionTimeout returns the current minimum election timeout.
 func minimumElectionTimeout() time.Duration {
-	return time.Duration(minimumElectionTimeoutMs) * time.Millisecond
+	return time.Duration(MinimumElectionTimeoutMs) * time.Millisecond
 }
 
 // maximumElectionTimeout returns the current maximum election time.
@@ -63,8 +68,8 @@ func maximumElectionTimeout() time.Duration {
 // electionTimeout returns a variable time.Duration, between the minimum and
 // maximum election timeouts.
 func electionTimeout() time.Duration {
-	n := rand.Intn(int(maximumElectionTimeoutMs - minimumElectionTimeoutMs))
-	d := int(minimumElectionTimeoutMs) + n
+	n := rand.Intn(int(maximumElectionTimeoutMs - MinimumElectionTimeoutMs))
+	d := int(MinimumElectionTimeoutMs) + n
 	return time.Duration(d) * time.Millisecond
 }
 
@@ -72,7 +77,7 @@ func electionTimeout() time.Duration {
 // broadcast from the leader. It is the minimum election timeout / 10, as
 // dictated by the spec: BroadcastInterval << ElectionTimeout << MTBF.
 func broadcastInterval() time.Duration {
-	d := minimumElectionTimeoutMs / 10
+	d := MinimumElectionTimeoutMs / 10
 	return time.Duration(d) * time.Millisecond
 }
 
