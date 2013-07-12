@@ -18,7 +18,7 @@ func noop(uint64, []byte) []byte {
 func TestLogEntriesAfter(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
-	log := NewLog(buf, noop)
+	log := newRaftLog(buf, noop)
 
 	type tuple struct {
 		AfterIndex      uint64
@@ -42,7 +42,7 @@ func TestLogEntriesAfter(t *testing.T) {
 		}
 	}
 
-	log.appendEntry(LogEntry{1, 1, c, nil, oneshot(), false})
+	log.appendEntry(logEntry{1, 1, c, nil, oneshot(), false})
 	for _, tu := range []tuple{
 		{0, 1, 0},
 		{1, 0, 1},
@@ -59,7 +59,7 @@ func TestLogEntriesAfter(t *testing.T) {
 		}
 	}
 
-	log.appendEntry(LogEntry{2, 1, c, nil, oneshot(), false})
+	log.appendEntry(logEntry{2, 1, c, nil, oneshot(), false})
 	for _, tu := range []tuple{
 		{0, 2, 0},
 		{1, 1, 1},
@@ -76,7 +76,7 @@ func TestLogEntriesAfter(t *testing.T) {
 		}
 	}
 
-	log.appendEntry(LogEntry{3, 2, c, nil, oneshot(), false})
+	log.appendEntry(logEntry{3, 2, c, nil, oneshot(), false})
 	for _, tu := range []tuple{
 		{0, 3, 0},
 		{1, 2, 1},
@@ -94,25 +94,25 @@ func TestLogEntriesAfter(t *testing.T) {
 	}
 }
 
-func TestLogEntryEncodeDecode(t *testing.T) {
-	for _, logEntry := range []LogEntry{
-		LogEntry{1, 1, []byte(`{}`), nil, oneshot(), false},
-		LogEntry{1, 2, []byte(`{}`), nil, oneshot(), false},
-		LogEntry{1, 2, []byte(`{}`), nil, oneshot(), false},
-		LogEntry{2, 2, []byte(`{}`), nil, oneshot(), false},
-		LogEntry{255, 3, []byte(`{"cmd": 123}`), nil, oneshot(), false},
-		LogEntry{math.MaxUint64 - 1, math.MaxUint64, []byte(`{}`), nil, oneshot(), false},
+func TestLogEncodeDecode(t *testing.T) {
+	for _, e := range []logEntry{
+		logEntry{1, 1, []byte(`{}`), nil, oneshot(), false},
+		logEntry{1, 2, []byte(`{}`), nil, oneshot(), false},
+		logEntry{1, 2, []byte(`{}`), nil, oneshot(), false},
+		logEntry{2, 2, []byte(`{}`), nil, oneshot(), false},
+		logEntry{255, 3, []byte(`{"cmd": 123}`), nil, oneshot(), false},
+		logEntry{math.MaxUint64 - 1, math.MaxUint64, []byte(`{}`), nil, oneshot(), false},
 	} {
 		b := &bytes.Buffer{}
-		if err := logEntry.encode(b); err != nil {
-			t.Errorf("%v: Encode: %s", logEntry, err)
+		if err := e.encode(b); err != nil {
+			t.Errorf("%v: Encode: %s", e, err)
 			continue
 		}
-		t.Logf("%v: Encode: %s", logEntry, strings.TrimSpace(b.String()))
+		t.Logf("%v: Encode: %s", e, strings.TrimSpace(b.String()))
 
-		var e LogEntry
-		if err := e.decode(b); err != nil {
-			t.Errorf("%v: Decode: %s", logEntry, err)
+		var e0 logEntry
+		if err := e0.decode(b); err != nil {
+			t.Errorf("%v: Decode: %s", e, err)
 		}
 	}
 }
@@ -120,24 +120,24 @@ func TestLogEntryEncodeDecode(t *testing.T) {
 func TestLogAppend(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
-	log := NewLog(buf, noop)
+	log := newRaftLog(buf, noop)
 
 	// Append 3 valid LogEntries
-	if err := log.appendEntry(LogEntry{1, 1, c, nil, oneshot(), false}); err != nil {
+	if err := log.appendEntry(logEntry{1, 1, c, nil, oneshot(), false}); err != nil {
 		t.Errorf("Append: %s", err)
 	}
-	if err := log.appendEntry(LogEntry{2, 1, c, nil, oneshot(), false}); err != nil {
+	if err := log.appendEntry(logEntry{2, 1, c, nil, oneshot(), false}); err != nil {
 		t.Errorf("Append: %s", err)
 	}
-	if err := log.appendEntry(LogEntry{3, 2, c, nil, oneshot(), false}); err != nil {
+	if err := log.appendEntry(logEntry{3, 2, c, nil, oneshot(), false}); err != nil {
 		t.Errorf("Append: %s", err)
 	}
 
 	// Append some invalid LogEntries
-	if err := log.appendEntry(LogEntry{4, 1, c, nil, oneshot(), false}); err != ErrTermTooSmall {
+	if err := log.appendEntry(logEntry{4, 1, c, nil, oneshot(), false}); err != ErrTermTooSmall {
 		t.Errorf("Append: expected ErrTermTooSmall, got %v", err)
 	}
-	if err := log.appendEntry(LogEntry{2, 2, c, nil, oneshot(), false}); err != ErrIndexTooSmall {
+	if err := log.appendEntry(logEntry{2, 2, c, nil, oneshot(), false}); err != ErrIndexTooSmall {
 		t.Errorf("Append: expected ErrIndexTooSmall, got %v", nil)
 	}
 
@@ -154,7 +154,7 @@ func TestLogAppend(t *testing.T) {
 
 	// Check our flush buffer
 	for i, expected := range log.entries[:2] {
-		var got LogEntry
+		var got logEntry
 		if err := got.decode(buf); err != nil {
 			t.Fatalf("after commit, got: %s", err)
 		}
@@ -180,14 +180,14 @@ func TestLogAppend(t *testing.T) {
 		t.Errorf("Commit: expected ErrIndexTooBig, got %v", err)
 	}
 
-	// Commit every LogEntry
+	// Commit every logEntry
 	if err := log.commitTo(3); err != nil {
 		t.Errorf("commitTo: %s", err)
 	}
 
 	// Check our buffer again
 	expected := log.entries[2]
-	var got LogEntry
+	var got logEntry
 	if err := got.decode(buf); err != nil {
 		t.Fatalf("after commit, got: %s", err)
 	}
@@ -208,7 +208,7 @@ func TestLogAppend(t *testing.T) {
 func TestLogContains(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
-	log := NewLog(buf, noop)
+	log := newRaftLog(buf, noop)
 
 	for _, tuple := range []struct {
 		Index uint64
@@ -218,7 +218,7 @@ func TestLogContains(t *testing.T) {
 		{2, 1},
 		{3, 2},
 	} {
-		e := LogEntry{tuple.Index, tuple.Term, c, nil, oneshot(), false}
+		e := logEntry{tuple.Index, tuple.Term, c, nil, oneshot(), false}
 		if err := log.appendEntry(e); err != nil {
 			t.Fatalf("appendEntry(%v): %s", e, err)
 		}
@@ -252,7 +252,7 @@ func TestLogContains(t *testing.T) {
 func TestLogTruncation(t *testing.T) {
 	c := []byte(`{}`)
 	buf := &bytes.Buffer{}
-	log := NewLog(buf, noop)
+	log := newRaftLog(buf, noop)
 
 	for _, tuple := range []struct {
 		Index uint64
@@ -262,7 +262,7 @@ func TestLogTruncation(t *testing.T) {
 		{2, 1},
 		{3, 2},
 	} {
-		e := LogEntry{tuple.Index, tuple.Term, c, nil, oneshot(), false}
+		e := logEntry{tuple.Index, tuple.Term, c, nil, oneshot(), false}
 		if err := log.appendEntry(e); err != nil {
 			t.Fatalf("appendEntry(%v): %s", e, err)
 		}
@@ -300,21 +300,21 @@ func TestLogCommitNoDuplicate(t *testing.T) {
 	// A pathological case: serial commitTo may double-apply the first command
 	hits := 0
 	apply := func(uint64, []byte) []byte { hits++; return []byte{} }
-	log := NewLog(&bytes.Buffer{}, apply)
+	log := newRaftLog(&bytes.Buffer{}, apply)
 
-	log.appendEntry(LogEntry{Index: 1, Term: 1, Command: []byte(`{}`)})
+	log.appendEntry(logEntry{Index: 1, Term: 1, Command: []byte(`{}`)})
 	log.commitTo(1)
 	if expected, got := 1, hits; expected != got {
 		t.Errorf("expected %d hits, got %d", expected, got)
 	}
 
-	log.appendEntry(LogEntry{Index: 2, Term: 1, Command: []byte(`{}`)})
+	log.appendEntry(logEntry{Index: 2, Term: 1, Command: []byte(`{}`)})
 	log.commitTo(2)
 	if expected, got := 2, hits; expected != got {
 		t.Errorf("expected %d hits, got %d", expected, got)
 	}
 
-	log.appendEntry(LogEntry{Index: 3, Term: 1, Command: []byte(`{}`)})
+	log.appendEntry(logEntry{Index: 3, Term: 1, Command: []byte(`{}`)})
 	log.commitTo(3)
 	if expected, got := 3, hits; expected != got {
 		t.Errorf("expected %d hits, got %d", expected, got)
@@ -323,12 +323,12 @@ func TestLogCommitNoDuplicate(t *testing.T) {
 
 func TestLogCommitTwice(t *testing.T) {
 	// A pathological case: commitTo(N) twice in a row should be fine.
-	log := NewLog(&bytes.Buffer{}, noop)
+	log := newRaftLog(&bytes.Buffer{}, noop)
 
-	log.appendEntry(LogEntry{Index: 1, Term: 1, Command: []byte(`{}`)})
+	log.appendEntry(logEntry{Index: 1, Term: 1, Command: []byte(`{}`)})
 	log.commitTo(1)
 
-	log.appendEntry(LogEntry{Index: 2, Term: 1, Command: []byte(`{}`)})
+	log.appendEntry(logEntry{Index: 2, Term: 1, Command: []byte(`{}`)})
 	log.commitTo(2)
 	log.commitTo(2) // shouldn't crash
 
@@ -338,7 +338,7 @@ func TestLogCommitTwice(t *testing.T) {
 }
 
 func TestCleanLogRecovery(t *testing.T) {
-	entries := []LogEntry{
+	entries := []logEntry{
 		{1, 1, []byte("{}"), nil, nil, false},
 		{2, 1, []byte("{}"), nil, nil, false},
 		{3, 2, []byte("{}"), nil, nil, false},
@@ -348,7 +348,7 @@ func TestCleanLogRecovery(t *testing.T) {
 	for _, entry := range entries {
 		entry.encode(buf)
 	}
-	log := NewLog(buf, noop)
+	log := newRaftLog(buf, noop)
 
 	if expected, got := len(entries), len(log.entries); expected != got {
 		t.Fatalf("expected %d, got %d", expected, got)
@@ -378,7 +378,7 @@ func TestCleanLogRecovery(t *testing.T) {
 		t.Errorf("commit to recovered index wrote to buffer")
 	}
 
-	if err := log.appendEntry(LogEntry{
+	if err := log.appendEntry(logEntry{
 		Index:   4,
 		Term:    3,
 		Command: []byte(`{"foo": "bar"}`),
@@ -394,7 +394,7 @@ func TestCleanLogRecovery(t *testing.T) {
 }
 
 func TestCorruptedLogRecovery(t *testing.T) {
-	entries := []LogEntry{
+	entries := []logEntry{
 		{1, 1, []byte("{}"), nil, nil, false},
 	}
 
@@ -403,7 +403,7 @@ func TestCorruptedLogRecovery(t *testing.T) {
 		entry.encode(buf)
 	}
 	buf.Write([]byte("garbage"))
-	log := NewLog(buf, noop)
+	log := newRaftLog(buf, noop)
 
 	if expected, got := len(entries), len(log.entries); expected != got {
 		t.Fatalf("expected %d, got %d", expected, got)
@@ -419,7 +419,7 @@ func TestCorruptedLogRecovery(t *testing.T) {
 		t.Errorf("log contains corrupted index=3 term=2")
 	}
 
-	if err := log.appendEntry(LogEntry{
+	if err := log.appendEntry(logEntry{
 		Index:   4,
 		Term:    3,
 		Command: []byte(`{"foo": "bar"}`),

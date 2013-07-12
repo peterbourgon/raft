@@ -21,18 +21,18 @@ var (
 	ErrBadTerm         = errors.New("bad term")
 )
 
-type Log struct {
+type raftLog struct {
 	sync.RWMutex
 	store     io.Writer
-	entries   []LogEntry
+	entries   []logEntry
 	commitPos int
 	apply     func(uint64, []byte) []byte
 }
 
-func NewLog(store io.ReadWriter, apply func(uint64, []byte) []byte) *Log {
-	l := &Log{
+func newRaftLog(store io.ReadWriter, apply func(uint64, []byte) []byte) *raftLog {
+	l := &raftLog{
 		store:     store,
-		entries:   []LogEntry{},
+		entries:   []logEntry{},
 		commitPos: -1, // no commits to begin with
 		apply:     apply,
 	}
@@ -42,9 +42,9 @@ func NewLog(store io.ReadWriter, apply func(uint64, []byte) []byte) *Log {
 
 // recover reads from the log's store, to populate the log with log entries
 // from persistent storage. It should be called once, at log instantiation.
-func (l *Log) recover(r io.Reader) error {
+func (l *raftLog) recover(r io.Reader) error {
 	for {
-		var entry LogEntry
+		var entry logEntry
 		switch err := entry.decode(r); err {
 		case io.EOF:
 			return nil // successful completion
@@ -69,11 +69,11 @@ func (l *Log) recover(r io.Reader) error {
 // are destined for a follower, which implies the application of the commands
 // should have the response thrown away, which implies we shouldn't pass a
 // commandResponse channel (see: commitTo implementation). In the normal case,
-// the LogEntries we return here will get serialized as they pass thru their
+// the raftLogEntries we return here will get serialized as they pass thru their
 // transport, and lose their commandResponse channel anyway. But in the case of
 // a LocalPeer (or equivalent) this doesn't happen. So, we must make sure to
 // proactively strip commandResponse channels.
-func (l *Log) entriesAfter(index uint64) ([]LogEntry, uint64) {
+func (l *raftLog) entriesAfter(index uint64) ([]logEntry, uint64) {
 	l.RLock()
 	defer l.RUnlock()
 
@@ -88,16 +88,16 @@ func (l *Log) entriesAfter(index uint64) ([]LogEntry, uint64) {
 
 	a := l.entries[pos:]
 	if len(a) == 0 {
-		return []LogEntry{}, lastTerm
+		return []logEntry{}, lastTerm
 	}
 
 	return stripResponseChannels(a), lastTerm
 }
 
-func stripResponseChannels(a []LogEntry) []LogEntry {
-	stripped := make([]LogEntry, len(a))
+func stripResponseChannels(a []logEntry) []logEntry {
+	stripped := make([]logEntry, len(a))
 	for i, entry := range a {
-		stripped[i] = LogEntry{
+		stripped[i] = logEntry{
 			Index:           entry.Index,
 			Term:            entry.Term,
 			Command:         entry.Command,
@@ -109,7 +109,7 @@ func stripResponseChannels(a []LogEntry) []LogEntry {
 
 // contains returns true if a log entry with the given index and term exists in
 // the log.
-func (l *Log) contains(index, term uint64) bool {
+func (l *raftLog) contains(index, term uint64) bool {
 	l.RLock()
 	defer l.RUnlock()
 
@@ -130,8 +130,8 @@ func (l *Log) contains(index, term uint64) bool {
 // committed, or doesn't match the given term.
 //
 // This method satisfies the requirement that a log entry in an AppendEntries
-// call precisely follows the accompanying LastLogTerm and LastLogIndex.
-func (l *Log) ensureLastIs(index, term uint64) error {
+// call precisely follows the accompanying LastraftLogTerm and LastraftLogIndex.
+func (l *raftLog) ensureLastIs(index, term uint64) error {
 	l.Lock()
 	defer l.Unlock()
 
@@ -160,7 +160,7 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 				l.entries[pos].committed = nil
 			}
 		}
-		l.entries = []LogEntry{}
+		l.entries = []logEntry{}
 		return nil
 	}
 
@@ -218,30 +218,30 @@ func (l *Log) ensureLastIs(index, term uint64) error {
 
 // getCommitIndex returns the commit index of the log. That is, the index of the
 // last log entry which can be considered committed.
-func (l *Log) getCommitIndex() uint64 {
+func (l *raftLog) getCommitIndex() uint64 {
 	l.RLock()
 	defer l.RUnlock()
 	return l.getCommitIndexWithLock()
 }
 
-func (l *Log) getCommitIndexWithLock() uint64 {
+func (l *raftLog) getCommitIndexWithLock() uint64 {
 	if l.commitPos < 0 {
 		return 0
 	}
 	if l.commitPos >= len(l.entries) {
-		panic(fmt.Sprintf("commitPos %d > len(l.entries) %d; bad bookkeeping in Log", l.commitPos, len(l.entries)))
+		panic(fmt.Sprintf("commitPos %d > len(l.entries) %d; bad bookkeeping in raftLog", l.commitPos, len(l.entries)))
 	}
 	return l.entries[l.commitPos].Index
 }
 
 // lastIndex returns the index of the most recent log entry.
-func (l *Log) lastIndex() uint64 {
+func (l *raftLog) lastIndex() uint64 {
 	l.RLock()
 	defer l.RUnlock()
 	return l.lastIndexWithLock()
 }
 
-func (l *Log) lastIndexWithLock() uint64 {
+func (l *raftLog) lastIndexWithLock() uint64 {
 	if len(l.entries) <= 0 {
 		return 0
 	}
@@ -249,13 +249,13 @@ func (l *Log) lastIndexWithLock() uint64 {
 }
 
 // lastTerm returns the term of the most recent log entry.
-func (l *Log) lastTerm() uint64 {
+func (l *raftLog) lastTerm() uint64 {
 	l.RLock()
 	defer l.RUnlock()
 	return l.lastTermWithLock()
 }
 
-func (l *Log) lastTermWithLock() uint64 {
+func (l *raftLog) lastTermWithLock() uint64 {
 	if len(l.entries) <= 0 {
 		return 0
 	}
@@ -265,7 +265,7 @@ func (l *Log) lastTermWithLock() uint64 {
 // appendEntry appends the passed log entry to the log. It will return an error
 // if the entry's term is smaller than the log's most recent term, or if the
 // entry's index is too small relative to the log's most recent entry.
-func (l *Log) appendEntry(entry LogEntry) error {
+func (l *raftLog) appendEntry(entry logEntry) error {
 	l.Lock()
 	defer l.Unlock()
 
@@ -287,7 +287,7 @@ func (l *Log) appendEntry(entry LogEntry) error {
 // commitTo commits all log entries up to and including the passed commitIndex.
 // Commit means: synchronize the log entry to persistent storage, and call the
 // state machine apply function for the log entry's command.
-func (l *Log) commitTo(commitIndex uint64) error {
+func (l *raftLog) commitTo(commitIndex uint64) error {
 	if commitIndex == 0 {
 		panic("commitTo(0)")
 	}
@@ -340,7 +340,7 @@ func (l *Log) commitTo(commitIndex uint64) error {
 				select {
 				case l.entries[pos].commandResponse <- resp:
 					break
-				case <-time.After(BroadcastInterval()): // << ElectionInterval
+				case <-time.After(MaximumElectionTimeout()): // << ElectionInterval
 					panic("uncoöperative command response receiver")
 				}
 				close(l.entries[pos].commandResponse)
@@ -378,12 +378,12 @@ func (l *Log) commitTo(commitIndex uint64) error {
 	return nil
 }
 
-// LogEntry is the atomic unit being managed by the distributed log. A log entry
+// logEntry is the atomic unit being managed by the distributed log. A log entry
 // always has an index (monotonically increasing), a term in which the Raft
 // network leader first sees the entry, and a command. The command is what gets
 // executed against the node state machine when the log entry is successfully
 // replicated.
-type LogEntry struct {
+type logEntry struct {
 	Index           uint64      `json:"index"`
 	Term            uint64      `json:"term"` // when received by leader
 	Command         []byte      `json:"command,omitempty"`
@@ -402,7 +402,7 @@ type LogEntry struct {
 //		| CRC    | TERM   | INDEX  | SIZE   | COMMAND |
 //		 ---------------------------------------------
 //
-func (e *LogEntry) encode(w io.Writer) error {
+func (e *logEntry) encode(w io.Writer) error {
 	if len(e.Command) <= 0 {
 		return ErrNoCommand
 	}
@@ -432,7 +432,7 @@ func (e *LogEntry) encode(w io.Writer) error {
 }
 
 // decode deserializes one log entry from the passed io.Reader.
-func (e *LogEntry) decode(r io.Reader) error {
+func (e *logEntry) decode(r io.Reader) error {
 	header := make([]byte, 24)
 
 	if _, err := r.Read(header); err != nil {
