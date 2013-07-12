@@ -294,7 +294,7 @@ func (s *Server) logGeneric(format string, args ...interface{}) {
 
 func (s *Server) logAppendEntriesResponse(req AppendEntries, resp AppendEntriesResponse, stepDown bool) {
 	s.logGeneric(
-		"got AppendEntries, sz=%d leader=%d prevIndex/Term=%d/%d commitIndex=%d: responded with success=%v (%s) stepDown=%v",
+		"got AppendEntries, sz=%d leader=%d prevIndex/Term=%d/%d commitIndex=%d: responded with success=%v (reason='%s') stepDown=%v",
 		len(req.Entries),
 		req.LeaderID,
 		req.PrevLogIndex,
@@ -307,7 +307,7 @@ func (s *Server) logAppendEntriesResponse(req AppendEntries, resp AppendEntriesR
 }
 func (s *Server) logRequestVoteResponse(req RequestVote, resp RequestVoteResponse, stepDown bool) {
 	s.logGeneric(
-		"got RequestVote, candidate=%d: responded with granted=%v (%s) stepDown=%v",
+		"got RequestVote, candidate=%d: responded with granted=%v (reason='%s') stepDown=%v",
 		req.CandidateID,
 		resp.VoteGranted,
 		resp.reason,
@@ -970,7 +970,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 
 	// We passed all the tests: cast vote in favor
 	s.vote = rv.CandidateID
-	s.resetElectionTimeout() // TODO why?
+	s.resetElectionTimeout()
 	return RequestVoteResponse{
 		Term:        s.term,
 		VoteGranted: true,
@@ -1105,14 +1105,14 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	// Commit up to the commit index.
 	//
 	// < ptrb> ongardie: if the new leader sends a 0-entry AppendEntries
-	// with lastIndex=5 commitIndex=4, to a follower that has lastIndex=5
-	// commitIndex=5 -- in my impl, this fails, because commitIndex is too
-	// small. shouldn't be?
+	//  with lastIndex=5 commitIndex=4, to a follower that has lastIndex=5
+	//  commitIndex=5 -- in my impl, this fails, because commitIndex is too
+	//  small. shouldn't be?
 	// <@ongardie> ptrb: i don't think that should fail
 	// <@ongardie> there are 4 ways an AppendEntries request can fail: (1)
-	// network drops packet (2) caller has stale term (3) would leave gap in the
-	// recipient's log (4) term of entry preceding the new entries doesn't match
-	// the term at the same index on the recipient
+	//  network drops packet (2) caller has stale term (3) would leave gap in
+	//  the recipient's log (4) term of entry preceding the new entries doesn't
+	//  match the term at the same index on the recipient
 	//
 	if r.CommitIndex > 0 && r.CommitIndex > s.log.getCommitIndex() {
 		if err := s.log.commitTo(r.CommitIndex); err != nil {

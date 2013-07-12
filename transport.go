@@ -260,17 +260,17 @@ func (p *HTTPPeer) RequestVote(rv RequestVote) RequestVoteResponse {
 // occurs, the response (the output of the remote server's ApplyFunc) is
 // eventually sent on the passed response chan.
 func (p *HTTPPeer) Command(cmd []byte, response chan []byte) error {
-	err := make(chan error)
+	errChan := make(chan error)
 	go func() {
 		var responseBuf bytes.Buffer
-		e := p.rpc(bytes.NewBuffer(cmd), CommandPath, &responseBuf)
-		err <- e
+		err := p.rpc(bytes.NewBuffer(cmd), CommandPath, &responseBuf)
+		errChan <- err
 		if err != nil {
 			return
 		}
 		response <- responseBuf.Bytes()
 	}()
-	return <-err // TODO timeout?
+	return <-errChan // TODO timeout?
 }
 
 // SetConfiguration forwards the passed network configuration to the remote

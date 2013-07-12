@@ -21,10 +21,11 @@ func testNServersOverHTTP(t *testing.T, n int) {
 		t.Fatalf("n <= 0")
 	}
 
-	log.SetOutput(&bytes.Buffer{})
+	logBuffer := &bytes.Buffer{}
+	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
-	log.SetFlags(log.Lmicroseconds)
-	oldMin, oldMax := resetElectionTimeoutMs(50, 100)
+	defer printOnFailure(t, logBuffer)
+	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
 	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	// node = Raft protocol server + a HTTP server + a transport bridge
@@ -80,7 +81,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 	}
 
 	// wait for them to organize
-	time.Sleep(3 * time.Duration(n) * maximumElectionTimeout())
+	time.Sleep(2 * time.Duration(n) * maximumElectionTimeout())
 
 	// send a command into the network
 	cmd := []byte(`{"do_something":true}`)
@@ -91,7 +92,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 	select {
 	case resp := <-response:
 		t.Logf("got %d-byte command response ('%s')", len(resp), resp)
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * maximumElectionTimeout()):
 		t.Fatal("timeout waiting for command response")
 	}
 
@@ -124,7 +125,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 	select {
 	case <-done:
 		t.Logf("all state machines successfully replicated")
-	case <-time.After(2 * time.Second):
+	case <-time.After(2 * maximumElectionTimeout()):
 		t.Fatalf("timeout waiting for state machines to replicate")
 	}
 }
@@ -149,6 +150,6 @@ func (ps *protectedSlice) Add(buf []byte) {
 func appender(ps *protectedSlice) ApplyFunc {
 	return func(commitIndex uint64, cmd []byte) []byte {
 		ps.Add(cmd)
-		return []byte{}
+		return []byte(`{"ok":true}`)
 	}
 }
