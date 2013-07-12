@@ -149,6 +149,9 @@ type ApplyFunc func(commitIndex uint64, cmd []byte) []byte
 // distributed log as a persistence layer. The apply function will be called
 // whenever a (user-domain) command has been safely replicated to this server,
 // and can be considered committed.
+//
+// NewServer creates a server, but you'll need to couple it with a transport to
+// make it usable. See the example(s) for usage scenarios.
 func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 	if id <= 0 {
 		panic("server id must be > 0")

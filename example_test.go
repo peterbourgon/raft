@@ -6,7 +6,7 @@ import (
 	"net/url"
 )
 
-func ExampleNewServer_http() {
+func ExampleNewServer_http_transport() {
 	// A no-op ApplyFunc
 	a := func(uint64, []byte) []byte { return []byte{} }
 

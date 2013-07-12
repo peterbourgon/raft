@@ -28,7 +28,7 @@ complete example][example-http].
 
 [httpt]: http://godoc.org/github.com/peterbourgon/raft#HTTPTransport
 [httpp]: http://godoc.org/github.com/peterbourgon/raft#HTTPPeer
-[example-http]: http://godoc.org/github.com/peterbourgon/raft#_example_HTTPNode
+[example-http]: http://godoc.org/github.com/peterbourgon/raft#_example_NewServer--Http
 
 Several other transports are coming; see TODO, below.
 
