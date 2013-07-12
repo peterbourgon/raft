@@ -104,7 +104,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		peers[peer.Id()] = peer
+		peers[peer.ID()] = peer
 	}
 
 	// inject each Raft protocol server with its peers

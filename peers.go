@@ -14,7 +14,7 @@ var (
 // concrete transport: HTTP, net/rpc, etc. It provides a Raft-domain interface
 // to a server. Peers must be encoding/gob encodable.
 type Peer interface {
-	Id() uint64
+	ID() uint64
 	AppendEntries(AppendEntries) AppendEntriesResponse
 	RequestVote(RequestVote) RequestVoteResponse
 	Command([]byte, chan []byte) error
@@ -30,7 +30,7 @@ type localPeer struct {
 
 func newLocalPeer(server *Server) *localPeer { return &localPeer{server} }
 
-func (p *localPeer) Id() uint64 { return p.server.Id() }
+func (p *localPeer) ID() uint64 { return p.server.Id() }
 
 func (p *localPeer) AppendEntries(ae AppendEntries) AppendEntriesResponse {
 	return p.server.appendEntries(ae)
@@ -71,7 +71,7 @@ type Peers map[uint64]Peer
 func MakePeers(peers ...Peer) Peers {
 	p := Peers{}
 	for _, peer := range peers {
-		p[peer.Id()] = peer
+		p[peer.ID()] = peer
 	}
 	return p
 }

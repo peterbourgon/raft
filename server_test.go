@@ -420,7 +420,7 @@ func (b *synchronizedBuffer) String() string {
 
 type nonresponsivePeer uint64
 
-func (p nonresponsivePeer) Id() uint64 { return uint64(p) }
+func (p nonresponsivePeer) ID() uint64 { return uint64(p) }
 func (p nonresponsivePeer) AppendEntries(AppendEntries) AppendEntriesResponse {
 	return AppendEntriesResponse{}
 }
@@ -436,7 +436,7 @@ func (p nonresponsivePeer) SetConfiguration(Peers) error {
 
 type approvingPeer uint64
 
-func (p approvingPeer) Id() uint64 { return uint64(p) }
+func (p approvingPeer) ID() uint64 { return uint64(p) }
 func (p approvingPeer) AppendEntries(AppendEntries) AppendEntriesResponse {
 	return AppendEntriesResponse{}
 }
@@ -455,7 +455,7 @@ func (p approvingPeer) SetConfiguration(Peers) error {
 
 type disapprovingPeer uint64
 
-func (p disapprovingPeer) Id() uint64 { return uint64(p) }
+func (p disapprovingPeer) ID() uint64 { return uint64(p) }
 func (p disapprovingPeer) AppendEntries(AppendEntries) AppendEntriesResponse {
 	return AppendEntriesResponse{}
 }

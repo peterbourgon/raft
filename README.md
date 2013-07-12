@@ -20,17 +20,11 @@ using a [Peer][peer] interface.
 [server]: http://godoc.org/github.com/peterbourgon/raft#Server
 [peer]: http://godoc.org/github.com/peterbourgon/raft#Peer
 
-The core raft package includes a [Local Peer][localpeer] wrapper, which provides
-a Peer interface to a Server within the same process-space. This is really only
-useful for testing and demonstration purposes.
-
-[localpeer]: http://godoc.org/github.com/peterbourgon/raft#LocalPeer
-
-For real-life applications, you'll probably want to expose your Server via some
-kind of network transport. This library includes a [HTTP Transport][httpt]
-(ingress) and [HTTP Peer][httpp] (egress) which combine to allow communication
-via REST-ish endpoints. For now, it's the simplest way to embed a Raft server in
-your application. See [this complete example][example-http].
+Servers are only useful when they can communicate with other servers. This
+library includes a [HTTP Transport][httpt] (ingress) and [HTTP Peer][httpp]
+(egress) which combine to allow communication via REST-ish endpoints. For now,
+it's the simplest way to embed a Raft server in your application. See [this
+complete example][example-http].
 
 [httpt]: http://godoc.org/github.com/peterbourgon/raft#HTTPTransport
 [httpp]: http://godoc.org/github.com/peterbourgon/raft#HTTPPeer

@@ -639,7 +639,7 @@ func (ni *nextIndex) set(id, index, prev uint64) (uint64, error) {
 //
 // flush is synchronous and can block forever if the peer is nonresponsive.
 func (s *Server) flush(peer Peer, ni *nextIndex) error {
-	peerId := peer.Id()
+	peerId := peer.ID()
 	currentTerm := s.term
 	prevLogIndex := ni.prevLogIndex(peerId)
 	entries, prevLogTerm := s.log.entriesAfter(prevLogIndex)
@@ -673,7 +673,7 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	}
 
 	if len(entries) > 0 {
-		newPrevLogIndex, err := ni.set(peer.Id(), entries[len(entries)-1].Index, prevLogIndex)
+		newPrevLogIndex, err := ni.set(peer.ID(), entries[len(entries)-1].Index, prevLogIndex)
 		if err != nil {
 			s.logGeneric("flush to %d: while moving prevLogIndex forward: %s", peerId, err)
 			return err
@@ -700,7 +700,7 @@ func (s *Server) concurrentFlush(peers Peers, ni *nextIndex, timeout time.Durati
 			err0 := make(chan error, 1)
 			go func() { err0 <- s.flush(peer0, ni) }()
 			go func() { time.Sleep(timeout); err0 <- ErrTimeout }()
-			responses <- tuple{peer0.Id(), <-err0} // first responder wins
+			responses <- tuple{peer0.ID(), <-err0} // first responder wins
 		}(peer)
 	}
 

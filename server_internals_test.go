@@ -168,7 +168,7 @@ func TestConfigurationReceipt(t *testing.T) {
 	if !ok {
 		t.Fatal("follower didn't get peer 3")
 	}
-	if peer.Id() != 3 {
+	if peer.ID() != 3 {
 		t.Fatal("follower got bad peer 3")
 	}
 }
@@ -241,7 +241,7 @@ type serializablePeer struct {
 	Err  string
 }
 
-func (p serializablePeer) Id() uint64 { return p.MyId }
+func (p serializablePeer) ID() uint64 { return p.MyId }
 func (p serializablePeer) AppendEntries(AppendEntries) AppendEntriesResponse {
 	return AppendEntriesResponse{}
 }
