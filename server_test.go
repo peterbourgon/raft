@@ -35,7 +35,7 @@ func TestFollowerToCandidate(t *testing.T) {
 
 	server.Start()
 	defer server.Stop()
-	if server.state.Get() != Follower {
+	if server.state.Get() != follower {
 		t.Fatalf("didn't start as Follower")
 	}
 
@@ -47,7 +47,7 @@ func TestFollowerToCandidate(t *testing.T) {
 		if time.Now().After(cutoff) {
 			t.Fatal("failed to become Candidate")
 		}
-		if state := server.state.Get(); state != Candidate {
+		if state := server.state.Get(); state != candidate {
 			time.Sleep(backoff)
 			backoff *= 2
 			continue
@@ -80,7 +80,7 @@ func TestCandidateToLeader(t *testing.T) {
 		if time.Now().After(cutoff) {
 			t.Fatal("failed to become Leader")
 		}
-		if state := server.state.Get(); state != Leader {
+		if state := server.state.Get(); state != leader {
 			time.Sleep(backoff)
 			backoff *= 2
 			continue
@@ -107,7 +107,7 @@ func TestFailedElection(t *testing.T) {
 	defer server.Stop()
 	time.Sleep(2 * ElectionTimeout())
 
-	if server.state.Get() == Leader {
+	if server.state.Get() == leader {
 		t.Fatalf("erroneously became Leader")
 	}
 	t.Logf("remained %s", server.state.Get())
@@ -184,7 +184,7 @@ func TestSimpleConsensus(t *testing.T) {
 			switch err := p1.Command(cmd, response); err {
 			case nil:
 				return
-			case ErrUnknownLeader:
+			case errUnknownLeader:
 				time.Sleep(MinimumElectionTimeout())
 			default:
 				t.Fatal(err)
@@ -293,7 +293,7 @@ func testOrder(t *testing.T, nServers int) {
 	}
 	peers := Peers{}
 	for _, server := range servers {
-		peers[server.Id()] = newLocalPeer(server)
+		peers[server.ID()] = newLocalPeer(server)
 	}
 	for _, server := range servers {
 		server.SetConfiguration(peers)
@@ -315,9 +315,9 @@ func testOrder(t *testing.T, nServers int) {
 	// boot up the cluster
 	for _, server := range servers {
 		server.Start()
-		defer func(server0 *Server) {
-			log.Printf("issuing stop command to server %d", server0.Id())
-			server0.Stop()
+		defer func(server *Server) {
+			log.Printf("issuing stop command to server %d", server.ID())
+			server.Stop()
 		}(server)
 	}
 
@@ -337,12 +337,12 @@ func testOrder(t *testing.T, nServers int) {
 				log.Printf("command=%d/%d peer=%d: OK", i+1, len(cmds), id)
 				break
 
-			case ErrUnknownLeader, ErrDeposed:
+			case errUnknownLeader, errDeposed:
 				log.Printf("command=%d/%d peer=%d: failed (%s) -- will retry", i+1, len(cmds), id, err)
 				time.Sleep(ElectionTimeout())
 				continue
 
-			case ErrTimeout:
+			case errTimeout:
 				log.Printf("command=%d/%d peer=%d: timed out -- assume it went through", i+1, len(cmds), id)
 				break
 

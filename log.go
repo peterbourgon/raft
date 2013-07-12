@@ -11,14 +11,13 @@ import (
 )
 
 var (
-	ErrTermTooSmall    = errors.New("term too small")
-	ErrIndexTooSmall   = errors.New("index too small")
-	ErrIndexTooBig     = errors.New("commit index too big")
-	ErrInvalidChecksum = errors.New("invalid checksum")
-	ErrInvalidLogLine  = errors.New("invalid log line")
-	ErrNoCommand       = errors.New("no command")
-	ErrBadIndex        = errors.New("bad index")
-	ErrBadTerm         = errors.New("bad term")
+	errTermTooSmall    = errors.New("term too small")
+	errIndexTooSmall   = errors.New("index too small")
+	errIndexTooBig     = errors.New("commit index too big")
+	errInvalidChecksum = errors.New("invalid checksum")
+	errNoCommand       = errors.New("no command")
+	errBadIndex        = errors.New("bad index")
+	errBadTerm         = errors.New("bad term")
 )
 
 type raftLog struct {
@@ -138,11 +137,11 @@ func (l *raftLog) ensureLastIs(index, term uint64) error {
 	// Taken loosely from benbjohnson's impl
 
 	if index < l.getCommitIndexWithLock() {
-		return ErrIndexTooSmall
+		return errIndexTooSmall
 	}
 
 	if index > l.lastIndexWithLock() {
-		return ErrIndexTooBig
+		return errIndexTooBig
 	}
 
 	// It's possible that the passed index is 0. It means the leader has come to
@@ -171,13 +170,13 @@ func (l *raftLog) ensureLastIs(index, term uint64) error {
 			continue // didn't find it yet
 		}
 		if l.entries[pos].Index > index {
-			return ErrBadIndex // somehow went past it
+			return errBadIndex // somehow went past it
 		}
 		if l.entries[pos].Index != index {
 			panic("not <, not >, but somehow !=")
 		}
 		if l.entries[pos].Term != term {
-			return ErrBadTerm
+			return errBadTerm
 		}
 		break // good
 	}
@@ -272,11 +271,11 @@ func (l *raftLog) appendEntry(entry logEntry) error {
 	if len(l.entries) > 0 {
 		lastTerm := l.lastTermWithLock()
 		if entry.Term < lastTerm {
-			return ErrTermTooSmall
+			return errTermTooSmall
 		}
 		lastIndex := l.lastIndexWithLock()
 		if entry.Term == lastTerm && entry.Index <= lastIndex {
-			return ErrIndexTooSmall
+			return errIndexTooSmall
 		}
 	}
 
@@ -297,12 +296,12 @@ func (l *raftLog) commitTo(commitIndex uint64) error {
 
 	// Reject old commit indexes
 	if commitIndex < l.getCommitIndexWithLock() {
-		return ErrIndexTooSmall
+		return errIndexTooSmall
 	}
 
 	// Reject new commit indexes
 	if commitIndex > l.lastIndexWithLock() {
-		return ErrIndexTooBig
+		return errIndexTooBig
 	}
 
 	// If we've already committed to the commitIndex, great!
@@ -404,13 +403,13 @@ type logEntry struct {
 //
 func (e *logEntry) encode(w io.Writer) error {
 	if len(e.Command) <= 0 {
-		return ErrNoCommand
+		return errNoCommand
 	}
 	if e.Index <= 0 {
-		return ErrBadIndex
+		return errBadIndex
 	}
 	if e.Term <= 0 {
-		return ErrBadTerm
+		return errBadTerm
 	}
 
 	commandSize := len(e.Command)
@@ -452,7 +451,7 @@ func (e *logEntry) decode(r io.Reader) error {
 	check.Write(command)
 
 	if crc != check.Sum32() {
-		return ErrInvalidChecksum
+		return errInvalidChecksum
 	}
 
 	e.Term = binary.LittleEndian.Uint64(header[4:12])

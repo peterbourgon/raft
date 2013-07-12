@@ -6,8 +6,7 @@ import (
 )
 
 var (
-	ErrTimeout        = errors.New("timeout")
-	ErrInvalidRequest = errors.New("invalid request")
+	errTimeout = errors.New("timeout")
 )
 
 // Peer is the local representation of a remote node. It may be backed by any
@@ -30,7 +29,7 @@ type localPeer struct {
 
 func newLocalPeer(server *Server) *localPeer { return &localPeer{server} }
 
-func (p *localPeer) ID() uint64 { return p.server.Id() }
+func (p *localPeer) ID() uint64 { return p.server.ID() }
 
 func (p *localPeer) AppendEntries(ae AppendEntries) AppendEntriesResponse {
 	return p.server.appendEntries(ae)
@@ -58,7 +57,7 @@ func requestVoteTimeout(p Peer, rv RequestVote, timeout time.Duration) (RequestV
 	case resp := <-c:
 		return resp, nil
 	case <-time.After(timeout):
-		return RequestVoteResponse{}, ErrTimeout
+		return RequestVoteResponse{}, errTimeout
 	}
 }
 

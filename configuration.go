@@ -9,8 +9,7 @@ import (
 )
 
 var (
-	ErrConfigurationAlreadyChanging = errors.New("Configuration already changing")
-	ErrConfigurationNotInOldNew     = errors.New("Configuration not in C_old,new")
+	errConfigurationAlreadyChanging = errors.New("Configuration already changing")
 )
 
 const (
@@ -144,7 +143,7 @@ func (c *configuration) changeTo(peers Peers) error {
 	defer c.Unlock()
 
 	if c.state != cOld {
-		return ErrConfigurationAlreadyChanging
+		return errConfigurationAlreadyChanging
 	}
 
 	if len(c.c_new) > 0 {

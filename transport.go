@@ -13,11 +13,25 @@ import (
 	"strconv"
 )
 
-const (
-	IdPath               = "/raft/id"
-	AppendEntriesPath    = "/raft/appendentries"
-	RequestVotePath      = "/raft/requestvote"
-	CommandPath          = "/raft/command"
+var (
+	// IDPath is where the ID handler (GET) will be installed in the
+	// HTTPTransport.
+	IDPath = "/raft/id"
+
+	// AppendEntriesPath is where the AppendEntries RPC handler (POST) will be
+	// installed in the HTTPTransport.
+	AppendEntriesPath = "/raft/appendentries"
+
+	// RequestVotePath is where the RequestVote RPC handler (POST) will be
+	// installed in the HTTPTransport.
+	RequestVotePath = "/raft/requestvote"
+
+	// CommandPath is where the Command RPC handler (POST) will be installed in
+	// the HTTPTransport.
+	CommandPath = "/raft/command"
+
+	// SetConfigurationPath is where the SetConfiguration RPC handler (POST)
+	// will be installed in the HTTPTransport.
 	SetConfigurationPath = "/raft/setconfiguration"
 )
 
@@ -40,7 +54,7 @@ type HTTPTransport struct{}
 // ServeMux at predefined paths. All of those handlers will forward their
 // received RPCs to the passed Server.
 func (t *HTTPTransport) Register(mux *http.ServeMux, s *Server) {
-	mux.HandleFunc(IdPath, t.idHandler(s))
+	mux.HandleFunc(IDPath, t.idHandler(s))
 	mux.HandleFunc(AppendEntriesPath, t.appendEntriesHandler(s))
 	mux.HandleFunc(RequestVotePath, t.requestVoteHandler(s))
 	mux.HandleFunc(CommandPath, t.commandHandler(s))
@@ -49,7 +63,7 @@ func (t *HTTPTransport) Register(mux *http.ServeMux, s *Server) {
 
 func (t *HTTPTransport) idHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(fmt.Sprint(s.Id())))
+		w.Write([]byte(fmt.Sprint(s.ID())))
 	}
 }
 
@@ -155,14 +169,14 @@ type HTTPPeer struct {
 }
 
 // NewHTTPPeer constructs a new HTTP peer. Part of construction involves
-// making a HTTP GET request against the IdPath to resolve the remote server's
+// making a HTTP GET request against the IDPath to resolve the remote server's
 // ID.
 func NewHTTPPeer(u url.URL) (*HTTPPeer, error) {
 	u.Path = ""
 
-	idUrl := u
-	idUrl.Path = IdPath
-	resp, err := http.Get(idUrl.String())
+	idURL := u
+	idURL.Path = IDPath
+	resp, err := http.Get(idURL.String())
 	if err != nil {
 		return nil, err
 	}

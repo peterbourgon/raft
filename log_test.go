@@ -134,10 +134,10 @@ func TestLogAppend(t *testing.T) {
 	}
 
 	// Append some invalid LogEntries
-	if err := log.appendEntry(logEntry{4, 1, c, nil, oneshot(), false}); err != ErrTermTooSmall {
+	if err := log.appendEntry(logEntry{4, 1, c, nil, oneshot(), false}); err != errTermTooSmall {
 		t.Errorf("Append: expected ErrTermTooSmall, got %v", err)
 	}
-	if err := log.appendEntry(logEntry{2, 2, c, nil, oneshot(), false}); err != ErrIndexTooSmall {
+	if err := log.appendEntry(logEntry{2, 2, c, nil, oneshot(), false}); err != errIndexTooSmall {
 		t.Errorf("Append: expected ErrIndexTooSmall, got %v", nil)
 	}
 
@@ -173,10 +173,10 @@ func TestLogAppend(t *testing.T) {
 	}
 
 	// Make some invalid commits
-	if err := log.commitTo(1); err != ErrIndexTooSmall {
+	if err := log.commitTo(1); err != errIndexTooSmall {
 		t.Errorf("Commit: expected ErrIndexTooSmall, got %v", err)
 	}
-	if err := log.commitTo(4); err != ErrIndexTooBig {
+	if err := log.commitTo(4); err != errIndexTooBig {
 		t.Errorf("Commit: expected ErrIndexTooBig, got %v", err)
 	}
 
@@ -272,13 +272,13 @@ func TestLogTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if expected, got := ErrIndexTooBig, log.ensureLastIs(4, 3); expected != got {
+	if expected, got := errIndexTooBig, log.ensureLastIs(4, 3); expected != got {
 		t.Errorf("expected %s, got %v", expected, got)
 	}
-	if expected, got := ErrIndexTooSmall, log.ensureLastIs(1, 1); expected != got {
+	if expected, got := errIndexTooSmall, log.ensureLastIs(1, 1); expected != got {
 		t.Errorf("expected %s, got %v", expected, got) // before commitIndex
 	}
-	if expected, got := ErrBadTerm, log.ensureLastIs(3, 4); expected != got {
+	if expected, got := errBadTerm, log.ensureLastIs(3, 4); expected != got {
 		t.Errorf("expected %s, got %v", expected, got)
 	}
 

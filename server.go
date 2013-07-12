@@ -15,9 +15,9 @@ import (
 )
 
 const (
-	Follower  = "Follower"
-	Candidate = "Candidate"
-	Leader    = "Leader"
+	follower  = "Follower"
+	candidate = "Candidate"
+	leader    = "Leader"
 )
 
 const (
@@ -31,13 +31,13 @@ var (
 )
 
 var (
-	ErrNotLeader             = errors.New("not the leader")
-	ErrUnknownLeader         = errors.New("unknown leader")
-	ErrDeposed               = errors.New("deposed during replication")
-	ErrAppendEntriesRejected = errors.New("AppendEntries RPC rejected")
-	ErrReplicationFailed     = errors.New("command replication failed (but will keep retrying)")
-	ErrOutOfSync             = errors.New("out of sync")
-	ErrAlreadyRunning        = errors.New("already running")
+	errNotLeader             = errors.New("not the leader")
+	errUnknownLeader         = errors.New("unknown leader")
+	errDeposed               = errors.New("deposed during replication")
+	errAppendEntriesRejected = errors.New("AppendEntries RPC rejected")
+	errReplicationFailed     = errors.New("command replication failed (but will keep retrying)")
+	errOutOfSync             = errors.New("out of sync")
+	errAlreadyRunning        = errors.New("already running")
 )
 
 // ResetElectionTimeoutMs sets the minimum and maximum election timeouts to the
@@ -158,7 +158,7 @@ func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 
 	s := &Server{
 		id:      id,
-		state:   &protectedString{value: Follower}, // "when servers start up they begin as followers"
+		state:   &protectedString{value: follower}, // "when servers start up they begin as followers"
 		running: &protectedBool{value: false},
 		leader:  unknownLeader, // unknown at startup
 		log:     log,
@@ -177,8 +177,8 @@ func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 	return s
 }
 
-// Id returns the ID of the server.
-func (s *Server) Id() uint64 { return s.id }
+// ID returns the ID of the server.
+func (s *Server) ID() uint64 { return s.id }
 
 type configurationTuple struct {
 	Peers Peers
@@ -273,11 +273,11 @@ func (s *Server) loop() {
 	s.running.Set(true)
 	for s.running.Get() {
 		switch state := s.state.Get(); state {
-		case Follower:
+		case follower:
 			s.followerSelect()
-		case Candidate:
+		case candidate:
 			s.candidateSelect()
-		case Leader:
+		case leader:
 			s.leaderSelect()
 		default:
 			panic(fmt.Sprintf("unknown Server State '%s'", state))
@@ -298,7 +298,7 @@ func (s *Server) logAppendEntriesResponse(req AppendEntries, resp AppendEntriesR
 	s.logGeneric(
 		"got AppendEntries, sz=%d leader=%d prevIndex/Term=%d/%d commitIndex=%d: responded with success=%v (%s) stepDown=%v",
 		len(req.Entries),
-		req.LeaderId,
+		req.LeaderID,
 		req.PrevLogIndex,
 		req.PrevLogTerm,
 		req.CommitIndex,
@@ -310,7 +310,7 @@ func (s *Server) logAppendEntriesResponse(req AppendEntries, resp AppendEntriesR
 func (s *Server) logRequestVoteResponse(req RequestVote, resp RequestVoteResponse, stepDown bool) {
 	s.logGeneric(
 		"got RequestVote, candidate=%d: responded with granted=%v (%s) stepDown=%v",
-		req.CandidateId,
+		req.CandidateID,
 		resp.VoteGranted,
 		resp.reason,
 		stepDown,
@@ -327,7 +327,7 @@ func (s *Server) forwardCommand(t commandTuple) {
 	switch s.leader {
 	case unknownLeader:
 		s.logGeneric("got command, but don't know leader")
-		t.Err <- ErrUnknownLeader
+		t.Err <- errUnknownLeader
 
 	case s.id: // I am the leader
 		panic("impossible state in forwardCommand")
@@ -349,7 +349,7 @@ func (s *Server) forwardConfiguration(t configurationTuple) {
 	switch s.leader {
 	case unknownLeader:
 		s.logGeneric("got configuration, but don't know leader")
-		t.Err <- ErrUnknownLeader
+		t.Err <- errUnknownLeader
 
 	case s.id: // I am the leader
 		panic("impossible state in forwardConfiguration")
@@ -389,13 +389,13 @@ func (s *Server) followerSelect() {
 			s.term++
 			s.vote = noVote
 			s.leader = unknownLeader
-			s.state.Set(Candidate)
+			s.state.Set(candidate)
 			s.resetElectionTimeout()
 			return
 
 		case t := <-s.appendEntriesChan:
 			if s.leader == unknownLeader {
-				s.leader = t.Request.LeaderId
+				s.leader = t.Request.LeaderID
 				s.logGeneric("discovered Leader %d", s.leader)
 			}
 			resp, stepDown := s.handleAppendEntries(t.Request)
@@ -406,8 +406,8 @@ func (s *Server) followerSelect() {
 				if s.leader != unknownLeader {
 					s.logGeneric("abandoning old leader=%d", s.leader)
 				}
-				s.logGeneric("following new leader=%d", t.Request.LeaderId)
-				s.leader = t.Request.LeaderId
+				s.logGeneric("following new leader=%d", t.Request.LeaderID)
+				s.leader = t.Request.LeaderID
 			}
 
 		case t := <-s.requestVoteChan:
@@ -441,7 +441,7 @@ func (s *Server) candidateSelect() {
 
 	tuples, canceler := s.config.allPeers().except(s.id).requestVotes(RequestVote{
 		Term:         s.term,
-		CandidateId:  s.id,
+		CandidateID:  s.id,
 		LastLogIndex: s.log.lastIndex(),
 		LastLogTerm:  s.log.lastTerm(),
 	})
@@ -456,7 +456,7 @@ func (s *Server) candidateSelect() {
 	if s.config.pass(votes) {
 		s.logGeneric("I immediately won the election")
 		s.leader = s.id
-		s.state.Set(Leader)
+		s.state.Set(leader)
 		s.vote = noVote
 		return
 	}
@@ -483,7 +483,7 @@ func (s *Server) candidateSelect() {
 			if t.rvr.Term > s.term {
 				s.logGeneric("got vote from future term (%d>%d); abandoning election", t.rvr.Term, s.term)
 				s.leader = unknownLeader
-				s.state.Set(Follower)
+				s.state.Set(follower)
 				s.vote = noVote
 				return // lose
 			}
@@ -499,7 +499,7 @@ func (s *Server) candidateSelect() {
 			if s.config.pass(votes) {
 				s.logGeneric("I won the election")
 				s.leader = s.id
-				s.state.Set(Leader)
+				s.state.Set(leader)
 				s.vote = noVote
 				return // win
 			}
@@ -515,9 +515,9 @@ func (s *Server) candidateSelect() {
 			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("after an AppendEntries, stepping down to Follower (leader=%d)", t.Request.LeaderId)
-				s.leader = t.Request.LeaderId
-				s.state.Set(Follower)
+				s.logGeneric("after an AppendEntries, stepping down to Follower (leader=%d)", t.Request.LeaderID)
+				s.leader = t.Request.LeaderID
+				s.state.Set(follower)
 				return // lose
 			}
 
@@ -529,7 +529,7 @@ func (s *Server) candidateSelect() {
 			if stepDown {
 				s.logGeneric("after a RequestVote, stepping down to Follower (leader unknown)")
 				s.leader = unknownLeader
-				s.state.Set(Follower)
+				s.state.Set(follower)
 				return // lose
 			}
 
@@ -562,7 +562,7 @@ func newNextIndex(peers Peers, defaultNextIndex uint64) *nextIndex {
 	ni := &nextIndex{
 		m: map[uint64]uint64{},
 	}
-	for id, _ := range peers {
+	for id := range peers {
 		ni.m[id] = defaultNextIndex
 	}
 	return ni
@@ -604,7 +604,7 @@ func (ni *nextIndex) decrement(id uint64, prev uint64) (uint64, error) {
 	}
 
 	if i != prev {
-		return i, ErrOutOfSync
+		return i, errOutOfSync
 	}
 
 	if i > 0 {
@@ -622,7 +622,7 @@ func (ni *nextIndex) set(id, index, prev uint64) (uint64, error) {
 		panic(fmt.Sprintf("peer %d not found", id))
 	}
 	if i != prev {
-		return i, ErrOutOfSync
+		return i, errOutOfSync
 	}
 
 	ni.m[id] = index
@@ -639,15 +639,15 @@ func (ni *nextIndex) set(id, index, prev uint64) (uint64, error) {
 //
 // flush is synchronous and can block forever if the peer is nonresponsive.
 func (s *Server) flush(peer Peer, ni *nextIndex) error {
-	peerId := peer.ID()
+	peerID := peer.ID()
 	currentTerm := s.term
-	prevLogIndex := ni.prevLogIndex(peerId)
+	prevLogIndex := ni.prevLogIndex(peerID)
 	entries, prevLogTerm := s.log.entriesAfter(prevLogIndex)
 	commitIndex := s.log.getCommitIndex()
-	s.logGeneric("flush to %d: term=%d leaderId=%d prevLogIndex/Term=%d/%d sz=%d commitIndex=%d", peerId, currentTerm, s.id, prevLogIndex, prevLogTerm, len(entries), commitIndex)
+	s.logGeneric("flush to %d: term=%d leaderId=%d prevLogIndex/Term=%d/%d sz=%d commitIndex=%d", peerID, currentTerm, s.id, prevLogIndex, prevLogTerm, len(entries), commitIndex)
 	resp := peer.AppendEntries(AppendEntries{
 		Term:         currentTerm,
-		LeaderId:     s.id,
+		LeaderID:     s.id,
 		PrevLogIndex: prevLogIndex,
 		PrevLogTerm:  prevLogTerm,
 		Entries:      entries,
@@ -655,34 +655,34 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	})
 
 	if resp.Term > currentTerm {
-		s.logGeneric("flush to %d: responseTerm=%d > currentTerm=%d: deposed", peerId, resp.Term, currentTerm)
-		return ErrDeposed
+		s.logGeneric("flush to %d: responseTerm=%d > currentTerm=%d: deposed", peerID, resp.Term, currentTerm)
+		return errDeposed
 	}
 
 	// It's possible the leader has timed out waiting for us, and moved on.
 	// So we should be careful, here, to make only valid state changes to `ni`.
 
 	if !resp.Success {
-		newPrevLogIndex, err := ni.decrement(peerId, prevLogIndex)
+		newPrevLogIndex, err := ni.decrement(peerID, prevLogIndex)
 		if err != nil {
-			s.logGeneric("flush to %d: while decrementing prevLogIndex: %s", peerId, err)
+			s.logGeneric("flush to %d: while decrementing prevLogIndex: %s", peerID, err)
 			return err
 		}
-		s.logGeneric("flush to %d: rejected; prevLogIndex(%d) becomes %d", peerId, peerId, newPrevLogIndex)
-		return ErrAppendEntriesRejected
+		s.logGeneric("flush to %d: rejected; prevLogIndex(%d) becomes %d", peerID, peerID, newPrevLogIndex)
+		return errAppendEntriesRejected
 	}
 
 	if len(entries) > 0 {
 		newPrevLogIndex, err := ni.set(peer.ID(), entries[len(entries)-1].Index, prevLogIndex)
 		if err != nil {
-			s.logGeneric("flush to %d: while moving prevLogIndex forward: %s", peerId, err)
+			s.logGeneric("flush to %d: while moving prevLogIndex forward: %s", peerID, err)
 			return err
 		}
-		s.logGeneric("flush to %d: accepted; prevLogIndex(%d) becomes %d", peerId, peerId, newPrevLogIndex)
+		s.logGeneric("flush to %d: accepted; prevLogIndex(%d) becomes %d", peerID, peerID, newPrevLogIndex)
 		return nil
 	}
 
-	s.logGeneric("flush to %d: accepted; prevLogIndex(%d) remains %d", peerId, peerId, ni.prevLogIndex(peerId))
+	s.logGeneric("flush to %d: accepted; prevLogIndex(%d) remains %d", peerID, peerID, ni.prevLogIndex(peerID))
 	return nil
 }
 
@@ -699,7 +699,7 @@ func (s *Server) concurrentFlush(peers Peers, ni *nextIndex, timeout time.Durati
 		go func(peer0 Peer) {
 			err0 := make(chan error, 1)
 			go func() { err0 <- s.flush(peer0, ni) }()
-			go func() { time.Sleep(timeout); err0 <- ErrTimeout }()
+			go func() { time.Sleep(timeout); err0 <- errTimeout }()
 			responses <- tuple{peer0.ID(), <-err0} // first responder wins
 		}(peer)
 	}
@@ -710,7 +710,7 @@ func (s *Server) concurrentFlush(peers Peers, ni *nextIndex, timeout time.Durati
 		case nil:
 			s.logGeneric("concurrentFlush: peer %d: OK (prevLogIndex(%d)=%d)", t.id, t.id, ni.prevLogIndex(t.id))
 			successes++
-		case ErrDeposed:
+		case errDeposed:
 			s.logGeneric("concurrentFlush: peer %d: deposed!", t.id)
 			stepDown = true
 		default:
@@ -814,7 +814,7 @@ func (s *Server) leaderSelect() {
 					return
 				}
 				s.config.changeCommitted()
-				if _, ok := s.config.allPeers()[s.Id()]; !ok {
+				if _, ok := s.config.allPeers()[s.ID()]; !ok {
 					s.logGeneric("leader expelled; shutting down")
 					q := make(chan struct{})
 					s.quit <- q
@@ -851,7 +851,7 @@ func (s *Server) leaderSelect() {
 			successes, stepDown := s.concurrentFlush(recipients, ni, 2*broadcastInterval())
 			if stepDown {
 				s.logGeneric("deposed during flush")
-				s.state.Set(Follower)
+				s.state.Set(follower)
 				s.leader = unknownLeader
 				return
 			}
@@ -869,7 +869,7 @@ func (s *Server) leaderSelect() {
 					s.logGeneric("this is crazy, I'm gonna become a follower")
 					s.leader = unknownLeader
 					s.vote = noVote
-					s.state.Set(Follower)
+					s.state.Set(follower)
 					return
 				}
 				if peersBestIndex > ourCommitIndex {
@@ -890,8 +890,8 @@ func (s *Server) leaderSelect() {
 			t.Response <- resp
 			if stepDown {
 				s.logGeneric("after an AppendEntries, deposed to Follower (leader=%d)", s.leader)
-				s.leader = t.Request.LeaderId
-				s.state.Set(Follower)
+				s.leader = t.Request.LeaderID
+				s.state.Set(follower)
 				return // deposed
 			}
 
@@ -902,7 +902,7 @@ func (s *Server) leaderSelect() {
 			if stepDown {
 				s.logGeneric("after a RequestVote, deposed to Follower (leader unknown)")
 				s.leader = unknownLeader
-				s.state.Set(Follower)
+				s.state.Set(follower)
 				return // deposed
 			}
 		}
@@ -935,7 +935,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 
 	// Special case: if we're the leader, and we haven't been deposed by a more
 	// recent term, then we should always deny the vote
-	if s.state.Get() == Leader && !stepDown {
+	if s.state.Get() == leader && !stepDown {
 		return RequestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
@@ -944,7 +944,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	}
 
 	// If we've already voted for someone else this term, reject
-	if s.vote != 0 && s.vote != rv.CandidateId {
+	if s.vote != 0 && s.vote != rv.CandidateID {
 		if stepDown {
 			panic("impossible state in handleRequestVote")
 		}
@@ -971,7 +971,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	}
 
 	// We passed all the tests: cast vote in favor
-	s.vote = rv.CandidateId
+	s.vote = rv.CandidateID
 	s.resetElectionTimeout() // TODO why?
 	return RequestVoteResponse{
 		Term:        s.term,
@@ -980,7 +980,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 }
 
 // handleAppendEntries will modify s.term and s.vote, but nothing else.
-// stepDown means you need to: s.leader=r.LeaderId, s.state.Set(Follower).
+// stepDown means you need to: s.leader=r.LeaderID, s.state.Set(Follower).
 func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bool) {
 	// Spec is ambiguous here; basing this on benbjohnson's impl
 
@@ -1010,7 +1010,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	// If the leader’s term (included in its RPC) is at least as large as the
 	// candidate’s current term, then the candidate recognizes the leader as
 	// legitimate and steps down, meaning that it returns to follower state."
-	if s.state.Get() == Candidate && r.LeaderId != s.leader && r.Term >= s.term {
+	if s.state.Get() == candidate && r.LeaderID != s.leader && r.Term >= s.term {
 		s.term = r.Term
 		s.vote = noVote
 		stepDown = true
@@ -1043,7 +1043,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 				panic("gob decode of peers failed")
 			}
 
-			if s.state.Get() == Leader {
+			if s.state.Get() == leader {
 				// TODO should we instead just ignore this entry?
 				return AppendEntriesResponse{
 					Term:    s.term,
@@ -1058,7 +1058,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 			}
 
 			// Expulsion recognition
-			if _, ok := peers[s.Id()]; !ok {
+			if _, ok := peers[s.ID()]; !ok {
 				entry.committed = make(chan bool)
 				go func() {
 					if <-entry.committed {
