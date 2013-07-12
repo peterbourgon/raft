@@ -1,8 +1,8 @@
 package raft
 
 type appendEntriesTuple struct {
-	Request  AppendEntries
-	Response chan AppendEntriesResponse
+	Request  appendEntries
+	Response chan appendEntriesResponse
 }
 
 type requestVoteTuple struct {
@@ -10,8 +10,8 @@ type requestVoteTuple struct {
 	Response chan RequestVoteResponse
 }
 
-// AppendEntries represents an AppendEntries RPC.
-type AppendEntries struct {
+// appendEntries represents an appendEntries RPC.
+type appendEntries struct {
 	Term         uint64     `json:"term"`
 	LeaderID     uint64     `json:"leader_id"`
 	PrevLogIndex uint64     `json:"prev_log_index"`
@@ -20,8 +20,8 @@ type AppendEntries struct {
 	CommitIndex  uint64     `json:"commit_index"`
 }
 
-// AppendEntriesResponse represents the response to an AppendEntries RPC.
-type AppendEntriesResponse struct {
+// appendEntriesResponse represents the response to an appendEntries RPC.
+type appendEntriesResponse struct {
 	Term    uint64 `json:"term"`
 	Success bool   `json:"success"`
 	reason  string

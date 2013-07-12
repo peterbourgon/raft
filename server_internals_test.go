@@ -18,8 +18,8 @@ func TestFollowerAllegiance(t *testing.T) {
 		log:    newRaftLog(&bytes.Buffer{}, noop),
 	}
 
-	// receives an AppendEntries from a future term and different leader
-	_, stepDown := s.handleAppendEntries(AppendEntries{
+	// receives an appendEntries from a future term and different leader
+	_, stepDown := s.handleAppendEntries(appendEntries{
 		Term:     6,
 		LeaderID: 3,
 	})
@@ -94,8 +94,8 @@ func TestLenientCommit(t *testing.T) {
 		state:  &protectedString{value: follower},
 	}
 
-	// an AppendEntries comes with correct PrevLogIndex but older CommitIndex
-	resp, stepDown := s.handleAppendEntries(AppendEntries{
+	// an appendEntries comes with correct PrevLogIndex but older CommitIndex
+	resp, stepDown := s.handleAppendEntries(appendEntries{
 		Term:         2,
 		LeaderID:     101,
 		PrevLogIndex: 5,
@@ -138,8 +138,8 @@ func TestConfigurationReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// via an AppendEntries
-	aer, _ := s.handleAppendEntries(AppendEntries{
+	// via an appendEntries
+	aer, _ := s.handleAppendEntries(appendEntries{
 		Term:         1,
 		LeaderID:     1,
 		PrevLogIndex: 1,
@@ -157,7 +157,7 @@ func TestConfigurationReceipt(t *testing.T) {
 
 	// it should succeed
 	if !aer.Success {
-		t.Fatalf("AppendEntriesResponse: no success: %s", aer.reason)
+		t.Fatalf("appendEntriesResponse: no success: %s", aer.reason)
 	}
 
 	// and the follower's configuration should be immediately updated
@@ -201,8 +201,8 @@ func TestNonLeaderExpulsion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// via an AppendEntries
-	s.handleAppendEntries(AppendEntries{
+	// via an appendEntries
+	s.handleAppendEntries(appendEntries{
 		Term:         1,
 		LeaderID:     1,
 		PrevLogIndex: 1,
@@ -219,7 +219,7 @@ func TestNonLeaderExpulsion(t *testing.T) {
 	})
 
 	// and once committed
-	s.handleAppendEntries(AppendEntries{
+	s.handleAppendEntries(appendEntries{
 		Term:         1,
 		LeaderID:     1,
 		PrevLogIndex: 2,
@@ -242,8 +242,8 @@ type serializablePeer struct {
 }
 
 func (p serializablePeer) ID() uint64 { return p.MyID }
-func (p serializablePeer) AppendEntries(AppendEntries) AppendEntriesResponse {
-	return AppendEntriesResponse{}
+func (p serializablePeer) AppendEntries(appendEntries) appendEntriesResponse {
+	return appendEntriesResponse{}
 }
 func (p serializablePeer) RequestVote(RequestVote) RequestVoteResponse {
 	return RequestVoteResponse{}

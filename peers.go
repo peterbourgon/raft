@@ -14,7 +14,7 @@ var (
 // to a server. Peers must be encoding/gob encodable.
 type Peer interface {
 	ID() uint64
-	AppendEntries(AppendEntries) AppendEntriesResponse
+	AppendEntries(appendEntries) appendEntriesResponse
 	RequestVote(RequestVote) RequestVoteResponse
 	Command([]byte, chan []byte) error
 	SetConfiguration(Peers) error
@@ -31,7 +31,7 @@ func newLocalPeer(server *Server) *localPeer { return &localPeer{server} }
 
 func (p *localPeer) ID() uint64 { return p.server.ID() }
 
-func (p *localPeer) AppendEntries(ae AppendEntries) AppendEntriesResponse {
+func (p *localPeer) AppendEntries(ae appendEntries) appendEntriesResponse {
 	return p.server.appendEntries(ae)
 }
 

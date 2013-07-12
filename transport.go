@@ -42,7 +42,7 @@ var (
 
 func init() {
 	gob.Register(&HTTPPeer{})
-	json.NewEncoder(&emptyAppendEntriesResponse).Encode(AppendEntriesResponse{})
+	json.NewEncoder(&emptyAppendEntriesResponse).Encode(appendEntriesResponse{})
 	json.NewEncoder(&emptyRequestVoteResponse).Encode(RequestVoteResponse{})
 }
 
@@ -71,7 +71,7 @@ func (t *HTTPTransport) appendEntriesHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
-		var ae AppendEntries
+		var ae appendEntries
 		if err := json.NewDecoder(r.Body).Decode(&ae); err != nil {
 			http.Error(w, emptyAppendEntriesResponse.String(), http.StatusBadRequest)
 			return
@@ -206,8 +206,8 @@ func (p *HTTPPeer) ID() uint64 { return p.id }
 // AppendEntries triggers a AppendEntries RPC to the remote server, and
 // returns the response. Errors at the transport layers are logged, and
 // represented by a default (unsuccessful) response
-func (p *HTTPPeer) AppendEntries(ae AppendEntries) AppendEntriesResponse {
-	var aer AppendEntriesResponse
+func (p *HTTPPeer) AppendEntries(ae appendEntries) appendEntriesResponse {
+	var aer appendEntriesResponse
 
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(ae); err != nil {

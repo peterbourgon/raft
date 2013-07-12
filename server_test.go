@@ -421,8 +421,8 @@ func (b *synchronizedBuffer) String() string {
 type nonresponsivePeer uint64
 
 func (p nonresponsivePeer) ID() uint64 { return uint64(p) }
-func (p nonresponsivePeer) AppendEntries(AppendEntries) AppendEntriesResponse {
-	return AppendEntriesResponse{}
+func (p nonresponsivePeer) AppendEntries(appendEntries) appendEntriesResponse {
+	return appendEntriesResponse{}
 }
 func (p nonresponsivePeer) RequestVote(RequestVote) RequestVoteResponse {
 	return RequestVoteResponse{}
@@ -437,8 +437,8 @@ func (p nonresponsivePeer) SetConfiguration(Peers) error {
 type approvingPeer uint64
 
 func (p approvingPeer) ID() uint64 { return uint64(p) }
-func (p approvingPeer) AppendEntries(AppendEntries) AppendEntriesResponse {
-	return AppendEntriesResponse{}
+func (p approvingPeer) AppendEntries(appendEntries) appendEntriesResponse {
+	return appendEntriesResponse{}
 }
 func (p approvingPeer) RequestVote(rv RequestVote) RequestVoteResponse {
 	return RequestVoteResponse{
@@ -456,8 +456,8 @@ func (p approvingPeer) SetConfiguration(Peers) error {
 type disapprovingPeer uint64
 
 func (p disapprovingPeer) ID() uint64 { return uint64(p) }
-func (p disapprovingPeer) AppendEntries(AppendEntries) AppendEntriesResponse {
-	return AppendEntriesResponse{}
+func (p disapprovingPeer) AppendEntries(appendEntries) appendEntriesResponse {
+	return appendEntriesResponse{}
 }
 func (p disapprovingPeer) RequestVote(rv RequestVote) RequestVoteResponse {
 	return RequestVoteResponse{

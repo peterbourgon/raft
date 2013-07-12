@@ -39,7 +39,7 @@ var (
 	errNotLeader             = errors.New("not the leader")
 	errUnknownLeader         = errors.New("unknown leader")
 	errDeposed               = errors.New("deposed during replication")
-	errAppendEntriesRejected = errors.New("AppendEntries RPC rejected")
+	errappendEntriesRejected = errors.New("appendEntries RPC rejected")
 	errReplicationFailed     = errors.New("command replication failed (but will keep retrying)")
 	errOutOfSync             = errors.New("out of sync")
 	errAlreadyRunning        = errors.New("already running")
@@ -234,11 +234,11 @@ func (s *Server) Command(cmd []byte, response chan []byte) error {
 	return <-err
 }
 
-// AppendEntries processes the given RPC and returns the response.
-func (s *Server) appendEntries(ae AppendEntries) AppendEntriesResponse {
+// appendEntries processes the given RPC and returns the response.
+func (s *Server) appendEntries(ae appendEntries) appendEntriesResponse {
 	t := appendEntriesTuple{
 		Request:  ae,
-		Response: make(chan AppendEntriesResponse),
+		Response: make(chan appendEntriesResponse),
 	}
 	s.appendEntriesChan <- t
 	return <-t.Response
@@ -297,9 +297,9 @@ func (s *Server) logGeneric(format string, args ...interface{}) {
 	log.Printf(prefix+format, args...)
 }
 
-func (s *Server) logAppendEntriesResponse(req AppendEntries, resp AppendEntriesResponse, stepDown bool) {
+func (s *Server) logappendEntriesResponse(req appendEntries, resp appendEntriesResponse, stepDown bool) {
 	s.logGeneric(
-		"got AppendEntries, sz=%d leader=%d prevIndex/Term=%d/%d commitIndex=%d: responded with success=%v (reason='%s') stepDown=%v",
+		"got appendEntries, sz=%d leader=%d prevIndex/Term=%d/%d commitIndex=%d: responded with success=%v (reason='%s') stepDown=%v",
 		len(req.Entries),
 		req.LeaderID,
 		req.PrevLogIndex,
@@ -402,7 +402,7 @@ func (s *Server) followerSelect() {
 				s.logGeneric("discovered Leader %d", s.leader)
 			}
 			resp, stepDown := s.handleAppendEntries(t.Request)
-			s.logAppendEntriesResponse(t.Request, resp, stepDown)
+			s.logappendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
 				// stepDown as a Follower means just to reset the leader
@@ -509,16 +509,16 @@ func (s *Server) candidateSelect() {
 
 		case t := <-s.appendEntriesChan:
 			// "While waiting for votes, a candidate may receive an
-			// AppendEntries RPC from another server claiming to be leader.
+			// appendEntries RPC from another server claiming to be leader.
 			// If the leader's term (included in its RPC) is at least as
 			// large as the candidate's current term, then the candidate
 			// recognizes the leader as legitimate and steps down, meaning
 			// that it returns to follower state."
 			resp, stepDown := s.handleAppendEntries(t.Request)
-			s.logAppendEntriesResponse(t.Request, resp, stepDown)
+			s.logappendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("after an AppendEntries, stepping down to Follower (leader=%d)", t.Request.LeaderID)
+				s.logGeneric("after an appendEntries, stepping down to Follower (leader=%d)", t.Request.LeaderID)
 				s.leader = t.Request.LeaderID
 				s.state.Set(follower)
 				return // lose
@@ -632,11 +632,11 @@ func (ni *nextIndex) set(id, index, prev uint64) (uint64, error) {
 	return index, nil
 }
 
-// flush generates and forwards an AppendEntries request that attempts to bring
+// flush generates and forwards an appendEntries request that attempts to bring
 // the given follower "in sync" with our log. It's idempotent, so it's used for
 // both heartbeats and replicating commands.
 //
-// The AppendEntries request we build represents our best attempt at a "delta"
+// The appendEntries request we build represents our best attempt at a "delta"
 // between our log and the follower's log. The passed nextIndex structure
 // manages that state.
 //
@@ -648,7 +648,7 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	entries, prevLogTerm := s.log.entriesAfter(prevLogIndex)
 	commitIndex := s.log.getCommitIndex()
 	s.logGeneric("flush to %d: term=%d leaderId=%d prevLogIndex/Term=%d/%d sz=%d commitIndex=%d", peerID, currentTerm, s.id, prevLogIndex, prevLogTerm, len(entries), commitIndex)
-	resp := peer.AppendEntries(AppendEntries{
+	resp := peer.AppendEntries(appendEntries{
 		Term:         currentTerm,
 		LeaderID:     s.id,
 		PrevLogIndex: prevLogIndex,
@@ -672,7 +672,7 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 			return err
 		}
 		s.logGeneric("flush to %d: rejected; prevLogIndex(%d) becomes %d", peerID, peerID, newPrevLogIndex)
-		return errAppendEntriesRejected
+		return errappendEntriesRejected
 	}
 
 	if len(entries) > 0 {
@@ -889,10 +889,10 @@ func (s *Server) leaderSelect() {
 
 		case t := <-s.appendEntriesChan:
 			resp, stepDown := s.handleAppendEntries(t.Request)
-			s.logAppendEntriesResponse(t.Request, resp, stepDown)
+			s.logappendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("after an AppendEntries, deposed to Follower (leader=%d)", s.leader)
+				s.logGeneric("after an appendEntries, deposed to Follower (leader=%d)", s.leader)
 				s.leader = t.Request.LeaderID
 				s.state.Set(follower)
 				return // deposed
@@ -984,7 +984,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 
 // handleAppendEntries will modify s.term and s.vote, but nothing else.
 // stepDown means you need to: s.leader=r.LeaderID, s.state.Set(Follower).
-func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bool) {
+func (s *Server) handleAppendEntries(r appendEntries) (appendEntriesResponse, bool) {
 	// Spec is ambiguous here; basing this on benbjohnson's impl
 
 	// Maybe a nicer way to handle this is to define explicit handler functions
@@ -993,7 +993,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// If the request is from an old term, reject
 	if r.Term < s.term {
-		return AppendEntriesResponse{
+		return appendEntriesResponse{
 			Term:    s.term,
 			Success: false,
 			reason:  fmt.Sprintf("Term %d < %d", r.Term, s.term),
@@ -1009,7 +1009,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	}
 
 	// Special case for candidates: "While waiting for votes, a candidate may
-	// receive an AppendEntries RPC from another server claiming to be leader.
+	// receive an appendEntries RPC from another server claiming to be leader.
 	// If the leader’s term (included in its RPC) is at least as large as the
 	// candidate’s current term, then the candidate recognizes the leader as
 	// legitimate and steps down, meaning that it returns to follower state."
@@ -1024,7 +1024,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// Reject if log doesn't contain a matching previous entry
 	if err := s.log.ensureLastIs(r.PrevLogIndex, r.PrevLogTerm); err != nil {
-		return AppendEntriesResponse{
+		return appendEntriesResponse{
 			Term:    s.term,
 			Success: false,
 			reason: fmt.Sprintf(
@@ -1048,14 +1048,14 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 			if s.state.Get() == leader {
 				// TODO should we instead just ignore this entry?
-				return AppendEntriesResponse{
+				return appendEntriesResponse{
 					Term:    s.term,
 					Success: false,
 					reason: fmt.Sprintf(
 						"AppendEntry %d/%d failed (configuration): %s",
 						i+1,
 						len(r.Entries),
-						"Leader shouldn't receive configurations via AppendEntries",
+						"Leader shouldn't receive configurations via appendEntries",
 					),
 				}, stepDown
 			}
@@ -1076,7 +1076,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 		// Append entry to the log
 		if err := s.log.appendEntry(entry); err != nil {
-			return AppendEntriesResponse{
+			return appendEntriesResponse{
 				Term:    s.term,
 				Success: false,
 				reason: fmt.Sprintf(
@@ -1093,7 +1093,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 		// for the entry to become committed)."
 		if entry.isConfiguration {
 			if err := s.config.directSet(peers); err != nil {
-				return AppendEntriesResponse{
+				return appendEntriesResponse{
 					Term:    s.term,
 					Success: false,
 					reason: fmt.Sprintf(
@@ -1109,19 +1109,19 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 
 	// Commit up to the commit index.
 	//
-	// < ptrb> ongardie: if the new leader sends a 0-entry AppendEntries
+	// < ptrb> ongardie: if the new leader sends a 0-entry appendEntries
 	//  with lastIndex=5 commitIndex=4, to a follower that has lastIndex=5
 	//  commitIndex=5 -- in my impl, this fails, because commitIndex is too
 	//  small. shouldn't be?
 	// <@ongardie> ptrb: i don't think that should fail
-	// <@ongardie> there are 4 ways an AppendEntries request can fail: (1)
+	// <@ongardie> there are 4 ways an appendEntries request can fail: (1)
 	//  network drops packet (2) caller has stale term (3) would leave gap in
 	//  the recipient's log (4) term of entry preceding the new entries doesn't
 	//  match the term at the same index on the recipient
 	//
 	if r.CommitIndex > 0 && r.CommitIndex > s.log.getCommitIndex() {
 		if err := s.log.commitTo(r.CommitIndex); err != nil {
-			return AppendEntriesResponse{
+			return appendEntriesResponse{
 				Term:    s.term,
 				Success: false,
 				reason:  fmt.Sprintf("CommitTo(%d) failed: %s", r.CommitIndex, err),
@@ -1130,7 +1130,7 @@ func (s *Server) handleAppendEntries(r AppendEntries) (AppendEntriesResponse, bo
 	}
 
 	// all good
-	return AppendEntriesResponse{
+	return appendEntriesResponse{
 		Term:    s.term,
 		Success: true,
 	}, stepDown

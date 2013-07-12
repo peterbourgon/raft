@@ -6,7 +6,7 @@ import (
 	"net/url"
 )
 
-func ExampleHTTPNode() {
+func ExampleNewServer_http() {
 	// A no-op ApplyFunc
 	a := func(uint64, []byte) []byte { return []byte{} }
 
