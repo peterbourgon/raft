@@ -5,7 +5,9 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -98,7 +100,7 @@ func (t *HTTPTransport) commandHandler(s *Server) http.HandlerFunc {
 		}
 
 		response := make(chan []byte, 1)
-		if err := s.command(cmd, response); err != nil {
+		if err := s.Command(cmd, response); err != nil {
 			http.Error(w, "", http.StatusInternalServerError)
 			return
 		}
@@ -124,7 +126,7 @@ func (t *HTTPTransport) setConfigurationHandler(s *Server) http.HandlerFunc {
 			return
 		}
 
-		if err := s.SetConfiguration(peers); err != nil {
+		if err := s.setConfiguration(peers); err != nil {
 			errBuf, _ := json.Marshal(commaError{err.Error(), false})
 			http.Error(w, string(errBuf), http.StatusInternalServerError)
 			return
@@ -186,63 +188,109 @@ func (p *HTTPPeer) Id() uint64 { return p.id }
 // TODO
 func (p *HTTPPeer) AppendEntries(ae AppendEntries) AppendEntriesResponse {
 	var aer AppendEntriesResponse
-	p.rpc(ae, AppendEntriesPath, &aer)
+
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(ae); err != nil {
+		log.Printf("Raft: HTTP Peer: AppendEntries: encode request: %s", err)
+		return aer
+	}
+
+	var resp bytes.Buffer
+	if err := p.rpc(&body, AppendEntriesPath, &resp); err != nil {
+		log.Printf("Raft: HTTP Peer: AppendEntries: during RPC: %s", err)
+		return aer
+	}
+
+	if err := json.Unmarshal(resp.Bytes(), &aer); err != nil {
+		log.Printf("Raft: HTTP Peer: AppendEntries: decode response: %s", err)
+		return aer
+	}
+
 	return aer
 }
 
 // TODO
 func (p *HTTPPeer) RequestVote(rv RequestVote) RequestVoteResponse {
 	var rvr RequestVoteResponse
-	p.rpc(rv, RequestVotePath, &rvr)
+
+	var body bytes.Buffer
+	if err := json.NewEncoder(&body).Encode(rv); err != nil {
+		log.Printf("Raft: HTTP Peer: RequestVote: encode request: %s", err)
+		return rvr
+	}
+
+	var resp bytes.Buffer
+	if err := p.rpc(&body, RequestVotePath, &resp); err != nil {
+		log.Printf("Raft: HTTP Peer: RequestVote: during RPC: %s", err)
+		return rvr
+	}
+
+	if err := json.Unmarshal(resp.Bytes(), &rvr); err != nil {
+		log.Printf("Raft: HTTP Peer: RequestVote: decode response: %s", err)
+		return rvr
+	}
+
 	return rvr
 }
 
 // TODO
 func (p *HTTPPeer) Command(cmd []byte, response chan []byte) error {
+	err := make(chan error)
 	go func() {
 		var responseBuf bytes.Buffer
-		p.rpc(cmd, CommandPath, &responseBuf)
+		err <- p.rpc(bytes.NewBuffer(cmd), CommandPath, &responseBuf)
 		response <- responseBuf.Bytes()
 	}()
-	return nil // TODO could make this smarter (i.e. timeout), with more work
+	return <-err // TODO timeout?
 }
 
 // TODO
 func (p *HTTPPeer) SetConfiguration(peers Peers) error {
 	buf := &bytes.Buffer{}
 	if err := gob.NewEncoder(buf).Encode(&peers); err != nil {
+		log.Printf("Raft: HTTP Peer: SetConfiguration: encode request: %s", err)
 		return err
 	}
 
-	var resp commaError
-	p.rpc(buf, SetConfigurationPath, &resp)
-	if !resp.Success {
-		return fmt.Errorf(resp.Error)
+	var resp bytes.Buffer
+	if err := p.rpc(buf, SetConfigurationPath, &resp); err != nil {
+		log.Printf("Raft: HTTP Peer: SetConfiguration: during RPC: %s", err)
+		return err
 	}
 
+	var commaErr commaError
+	if err := json.Unmarshal(resp.Bytes(), &commaErr); err != nil {
+		log.Printf("Raft: HTTP Peer: SetConfiguration: decode response: %s", err)
+		return err
+	}
+
+	if !commaErr.Success {
+		return fmt.Errorf(commaErr.Error)
+	}
 	return nil
 }
 
 // TODO
-func (p *HTTPPeer) rpc(request interface{}, path string, response interface{}) error {
-	var body bytes.Buffer
-	if err := json.NewEncoder(&body).Encode(request); err != nil {
-		return err
-	}
-
+func (p *HTTPPeer) rpc(request *bytes.Buffer, path string, response *bytes.Buffer) error {
 	url := p.url
 	url.Path = path
-	resp, err := http.Post(url.String(), "application/json", &body)
+	resp, err := http.Post(url.String(), "application/json", request)
 	if err != nil {
+		println("### HTTP Peer rpc Post error:", err.Error())
 		return err
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(response); err != nil {
+	n, err := io.Copy(response, resp.Body)
+	if err != nil {
 		return err
+	}
+	if l := response.Len(); n < int64(l) {
+		return fmt.Errorf("Short read (%d < %d)", n, l)
 	}
 
 	return nil

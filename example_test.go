@@ -39,7 +39,7 @@ func ExampleNewServer() {
 	go func() { http.ListenAndServe(":8080", m) }()
 
 	// Set the initial server configuration, and start the server
-	s.SetConfiguration(MakePeers(
+	s.SetPeers(MakePeers(
 		mustHTTPPeer(mustURL("http://localhost:8080")),
 		mustHTTPPeer(mustURL("http://10.1.1.11:8080")),
 		mustHTTPPeer(mustURL("http://10.1.1.12:8080")),

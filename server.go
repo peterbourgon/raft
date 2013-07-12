@@ -185,18 +185,21 @@ type configurationTuple struct {
 	Err   chan error
 }
 
-// SetConfiguration sets the peers that this server will attempt to communicate
-// with. The set peers should include a peer that represents this server, so
-// that quorum is calculated correctly. SetConfiguration must be called before
-// starting the server.
-func (s *Server) SetConfiguration(peers Peers) error {
-	// Pre-start SetConfiguration are special cased to simply set and return
-	if !s.running.Get() {
-		s.config.directSet(peers)
-		return nil
+// SetPeers sets the peers that this server will attempt to communicate with.
+// The set peers should include a peer that represents this server. SetPeers
+// must be called before starting the server.
+func (s *Server) SetPeers(peers Peers) error {
+	if s.running.Get() {
+		return ErrAlreadyRunning
 	}
 
-	// Post-start SetConfiguration require communication with the leader
+	s.config.directSet(peers)
+	return nil
+}
+
+// setConfiguration attempts to set the server's configuration to the passed
+// peers. This is the Raft-domain method that should be called by transports.
+func (s *Server) setConfiguration(peers Peers) error {
 	err := make(chan error)
 	s.configurationChan <- configurationTuple{peers, err}
 	return <-err
@@ -226,7 +229,7 @@ type commandTuple struct {
 // command gets committed to the local server log, it's passed to the apply
 // function, and the response from that function is provided on the
 // passed response chan.
-func (s *Server) command(cmd []byte, response chan []byte) error {
+func (s *Server) Command(cmd []byte, response chan []byte) error {
 	err := make(chan error)
 	s.commandChan <- commandTuple{cmd, response, err}
 	return <-err

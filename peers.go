@@ -41,11 +41,11 @@ func (p *localPeer) RequestVote(rv RequestVote) RequestVoteResponse {
 }
 
 func (p *localPeer) Command(cmd []byte, response chan []byte) error {
-	return p.server.command(cmd, response)
+	return p.server.Command(cmd, response)
 }
 
 func (p *localPeer) SetConfiguration(peers Peers) error {
-	return p.server.SetConfiguration(peers)
+	return p.server.setConfiguration(peers)
 }
 
 // requestVoteTimeout issues the RequestVote to the given peer.
