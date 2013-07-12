@@ -109,7 +109,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 
 	// inject each Raft protocol server with its peers
 	for _, raftServer := range raftServers {
-		raftServer.SetPeers(peers)
+		raftServer.SetConfiguration(peers)
 	}
 
 	// start each Raft protocol server

@@ -185,21 +185,17 @@ type configurationTuple struct {
 	Err   chan error
 }
 
-// SetPeers sets the peers that this server will attempt to communicate with.
-// The set peers should include a peer that represents this server. SetPeers
-// must be called before starting the server.
-func (s *Server) SetPeers(peers Peers) error {
-	if s.running.Get() {
-		return ErrAlreadyRunning
+// SetConfiguration sets the peers that this server will attempt to communicate
+// with. The set peers should include a peer that represents this server.
+// SetConfiguration must be called before starting the server. Calls to
+// SetConfiguration after the server has been started will be replicated
+// throughout the Raft network using the joint-consensus mechanism.
+func (s *Server) SetConfiguration(peers Peers) error {
+	if !s.running.Get() {
+		s.config.directSet(peers)
+		return nil
 	}
 
-	s.config.directSet(peers)
-	return nil
-}
-
-// setConfiguration attempts to set the server's configuration to the passed
-// peers. This is the Raft-domain method that should be called by transports.
-func (s *Server) setConfiguration(peers Peers) error {
 	err := make(chan error)
 	s.configurationChan <- configurationTuple{peers, err}
 	return <-err

@@ -27,7 +27,7 @@ func TestFollowerToCandidate(t *testing.T) {
 	defer ResetElectionTimeoutMs(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(MakePeers(
+	server.SetConfiguration(MakePeers(
 		newLocalPeer(server),
 		nonresponsivePeer(2),
 		nonresponsivePeer(3),
@@ -64,7 +64,7 @@ func TestCandidateToLeader(t *testing.T) {
 	defer ResetElectionTimeoutMs(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(MakePeers(
+	server.SetConfiguration(MakePeers(
 		newLocalPeer(server),
 		approvingPeer(2),
 		nonresponsivePeer(3),
@@ -97,7 +97,7 @@ func TestFailedElection(t *testing.T) {
 	defer ResetElectionTimeoutMs(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
-	server.SetPeers(MakePeers(
+	server.SetConfiguration(MakePeers(
 		newLocalPeer(server),
 		disapprovingPeer(2),
 		nonresponsivePeer(3),
@@ -164,9 +164,9 @@ func TestSimpleConsensus(t *testing.T) {
 	p2 := newLocalPeer(s2)
 	p3 := newLocalPeer(s3)
 	peers := MakePeers(p1, p2, p3)
-	s1.SetPeers(peers)
-	s2.SetPeers(peers)
-	s3.SetPeers(peers)
+	s1.SetConfiguration(peers)
+	s2.SetConfiguration(peers)
+	s3.SetConfiguration(peers)
 
 	s1.Start()
 	s2.Start()
@@ -296,7 +296,7 @@ func testOrder(t *testing.T, nServers int) {
 		peers[server.Id()] = newLocalPeer(server)
 	}
 	for _, server := range servers {
-		server.SetPeers(peers)
+		server.SetConfiguration(peers)
 	}
 
 	// define cmds

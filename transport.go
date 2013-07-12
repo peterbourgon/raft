@@ -126,7 +126,7 @@ func (t *HTTPTransport) setConfigurationHandler(s *Server) http.HandlerFunc {
 			return
 		}
 
-		if err := s.setConfiguration(peers); err != nil {
+		if err := s.SetConfiguration(peers); err != nil {
 			errBuf, _ := json.Marshal(commaError{err.Error(), false})
 			http.Error(w, string(errBuf), http.StatusInternalServerError)
 			return

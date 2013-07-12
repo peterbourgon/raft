@@ -6,12 +6,12 @@ import (
 	"net/url"
 )
 
-func ExampleNewServer() {
+func ExampleHTTPNode() {
 	// A no-op ApplyFunc
 	a := func(uint64, []byte) []byte { return []byte{} }
 
 	// Helper function to parse URLs
-	mustURL := func(rawurl string) url.URL {
+	mustParseURL := func(rawurl string) url.URL {
 		u, err := url.Parse(rawurl)
 		if err != nil {
 			panic(err)
@@ -21,7 +21,7 @@ func ExampleNewServer() {
 	}
 
 	// Helper function to construct HTTPPeers
-	mustHTTPPeer := func(u url.URL) *HTTPPeer {
+	mustNewHTTPPeer := func(u url.URL) *HTTPPeer {
 		p, err := NewHTTPPeer(u)
 		if err != nil {
 			panic(err)
@@ -39,12 +39,12 @@ func ExampleNewServer() {
 	go func() { http.ListenAndServe(":8080", m) }()
 
 	// Set the initial server configuration, and start the server
-	s.SetPeers(MakePeers(
-		mustHTTPPeer(mustURL("http://localhost:8080")),
-		mustHTTPPeer(mustURL("http://10.1.1.11:8080")),
-		mustHTTPPeer(mustURL("http://10.1.1.12:8080")),
-		mustHTTPPeer(mustURL("http://10.1.1.13:8080")),
-		mustHTTPPeer(mustURL("http://10.1.1.14:8080")),
+	s.SetConfiguration(MakePeers(
+		mustNewHTTPPeer(mustParseURL("http://localhost:8080")),
+		mustNewHTTPPeer(mustParseURL("http://10.1.1.11:8080")),
+		mustNewHTTPPeer(mustParseURL("http://10.1.1.12:8080")),
+		mustNewHTTPPeer(mustParseURL("http://10.1.1.13:8080")),
+		mustNewHTTPPeer(mustParseURL("http://10.1.1.14:8080")),
 	))
 	s.Start()
 }

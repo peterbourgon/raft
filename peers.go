@@ -45,7 +45,7 @@ func (p *localPeer) Command(cmd []byte, response chan []byte) error {
 }
 
 func (p *localPeer) SetConfiguration(peers Peers) error {
-	return p.server.setConfiguration(peers)
+	return p.server.SetConfiguration(peers)
 }
 
 // requestVoteTimeout issues the RequestVote to the given peer.
