@@ -15,7 +15,7 @@ var (
 type Peer interface {
 	ID() uint64
 	AppendEntries(appendEntries) appendEntriesResponse
-	RequestVote(RequestVote) RequestVoteResponse
+	RequestVote(requestVote) requestVoteResponse
 	Command([]byte, chan []byte) error
 	SetConfiguration(Peers) error
 }
@@ -35,7 +35,7 @@ func (p *localPeer) AppendEntries(ae appendEntries) appendEntriesResponse {
 	return p.server.appendEntries(ae)
 }
 
-func (p *localPeer) RequestVote(rv RequestVote) RequestVoteResponse {
+func (p *localPeer) RequestVote(rv requestVote) requestVoteResponse {
 	return p.server.requestVote(rv)
 }
 
@@ -47,17 +47,17 @@ func (p *localPeer) SetConfiguration(peers Peers) error {
 	return p.server.SetConfiguration(peers)
 }
 
-// requestVoteTimeout issues the RequestVote to the given peer.
+// requestVoteTimeout issues the requestVote to the given peer.
 // If no response is received before timeout, an error is returned.
-func requestVoteTimeout(p Peer, rv RequestVote, timeout time.Duration) (RequestVoteResponse, error) {
-	c := make(chan RequestVoteResponse, 1)
+func requestVoteTimeout(p Peer, rv requestVote, timeout time.Duration) (requestVoteResponse, error) {
+	c := make(chan requestVoteResponse, 1)
 	go func() { c <- p.RequestVote(rv) }()
 
 	select {
 	case resp := <-c:
 		return resp, nil
 	case <-time.After(timeout):
-		return RequestVoteResponse{}, errTimeout
+		return requestVoteResponse{}, errTimeout
 	}
 }
 
@@ -97,14 +97,14 @@ func (p Peers) quorum() int {
 	}
 }
 
-// requestVotes sends the passed RequestVote RPC to every peer in Peers. It
-// forwards responses along the returned RequestVoteResponse channel. It makes
+// requestVotes sends the passed requestVote RPC to every peer in Peers. It
+// forwards responses along the returned requestVoteResponse channel. It makes
 // the RPCs with a timeout of BroadcastInterval * 2 (chosen arbitrarily). Peers
 // that don't respond within the timeout are retried forever. The retry loop
 // stops only when all peers have responded, or a Cancel signal is sent via the
 // returned Canceler.
-func (p Peers) requestVotes(r RequestVote) (chan voteResponseTuple, canceler) {
-	// "[A server entering the candidate stage] issues RequestVote RPCs in
+func (p Peers) requestVotes(r requestVote) (chan voteResponseTuple, canceler) {
+	// "[A server entering the candidate stage] issues requestVote RPCs in
 	// parallel to each of the other servers in the cluster. If the candidate
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
@@ -155,7 +155,7 @@ func (p Peers) requestVotes(r RequestVote) (chan voteResponseTuple, canceler) {
 
 type voteResponseTuple struct {
 	id  uint64
-	rvr RequestVoteResponse
+	rvr requestVoteResponse
 	err error
 }
 

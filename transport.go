@@ -22,7 +22,7 @@ var (
 	// installed in the HTTPTransport.
 	AppendEntriesPath = "/raft/appendentries"
 
-	// RequestVotePath is where the RequestVote RPC handler (POST) will be
+	// requestVotePath is where the requestVote RPC handler (POST) will be
 	// installed in the HTTPTransport.
 	RequestVotePath = "/raft/requestvote"
 
@@ -43,7 +43,7 @@ var (
 func init() {
 	gob.Register(&HTTPPeer{})
 	json.NewEncoder(&emptyAppendEntriesResponse).Encode(appendEntriesResponse{})
-	json.NewEncoder(&emptyRequestVoteResponse).Encode(RequestVoteResponse{})
+	json.NewEncoder(&emptyRequestVoteResponse).Encode(requestVoteResponse{})
 }
 
 // HTTPTransport provides a bridge between a Raft Server and the outside world
@@ -89,7 +89,7 @@ func (t *HTTPTransport) requestVoteHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
-		var rv RequestVote
+		var rv requestVote
 		if err := json.NewDecoder(r.Body).Decode(&rv); err != nil {
 			http.Error(w, emptyRequestVoteResponse.String(), http.StatusBadRequest)
 			return
@@ -229,11 +229,11 @@ func (p *HTTPPeer) AppendEntries(ae appendEntries) appendEntriesResponse {
 	return aer
 }
 
-// RequestVote triggers a RequestVote RPC to the remote server, and
+// RequestVote triggers a requestVote RPC to the remote server, and
 // returns the response. Errors at the transport layers are logged, and
 // represented by a default (unsuccessful) response.
-func (p *HTTPPeer) RequestVote(rv RequestVote) RequestVoteResponse {
-	var rvr RequestVoteResponse
+func (p *HTTPPeer) RequestVote(rv requestVote) requestVoteResponse {
+	var rvr requestVoteResponse
 
 	var body bytes.Buffer
 	if err := json.NewEncoder(&body).Encode(rv); err != nil {

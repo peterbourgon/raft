@@ -244,11 +244,11 @@ func (s *Server) appendEntries(ae appendEntries) appendEntriesResponse {
 	return <-t.Response
 }
 
-// RequestVote processes the given RPC and returns the response.
-func (s *Server) requestVote(rv RequestVote) RequestVoteResponse {
+// requestVote processes the given RPC and returns the response.
+func (s *Server) requestVote(rv requestVote) requestVoteResponse {
 	t := requestVoteTuple{
 		Request:  rv,
-		Response: make(chan RequestVoteResponse),
+		Response: make(chan requestVoteResponse),
 	}
 	s.requestVoteChan <- t
 	return <-t.Response
@@ -310,7 +310,7 @@ func (s *Server) logappendEntriesResponse(req appendEntries, resp appendEntriesR
 		stepDown,
 	)
 }
-func (s *Server) logRequestVoteResponse(req RequestVote, resp RequestVoteResponse, stepDown bool) {
+func (s *Server) logRequestVoteResponse(req requestVote, resp requestVoteResponse, stepDown bool) {
 	s.logGeneric(
 		"got RequestVote, candidate=%d: responded with granted=%v (reason='%s') stepDown=%v",
 		req.CandidateID,
@@ -437,12 +437,12 @@ func (s *Server) candidateSelect() {
 		panic("existing vote when entering candidateSelect")
 	}
 
-	// "[A server entering the candidate stage] issues RequestVote RPCs in
+	// "[A server entering the candidate stage] issues requestVote RPCs in
 	// parallel to each of the other servers in the cluster. If the candidate
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
 
-	tuples, canceler := s.config.allPeers().except(s.id).requestVotes(RequestVote{
+	tuples, canceler := s.config.allPeers().except(s.id).requestVotes(requestVote{
 		Term:         s.term,
 		CandidateID:  s.id,
 		LastLogIndex: s.log.lastIndex(),
@@ -530,7 +530,7 @@ func (s *Server) candidateSelect() {
 			s.logRequestVoteResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("after a RequestVote, stepping down to Follower (leader unknown)")
+				s.logGeneric("after a requestVote, stepping down to Follower (leader unknown)")
 				s.leader = unknownLeader
 				s.state.Set(follower)
 				return // lose
@@ -542,7 +542,7 @@ func (s *Server) candidateSelect() {
 			// same time, votes could be split so that no candidate obtains a
 			// majority. When this happens, each candidate will start a new
 			// election by incrementing its term and initiating another round of
-			// RequestVote RPCs."
+			// requestVote RPCs."
 			s.logGeneric("election ended with no winner; incrementing term and trying again")
 			s.resetElectionTimeout()
 			s.term++
@@ -903,7 +903,7 @@ func (s *Server) leaderSelect() {
 			s.logRequestVoteResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("after a RequestVote, deposed to Follower (leader unknown)")
+				s.logGeneric("after a requestVote, deposed to Follower (leader unknown)")
 				s.leader = unknownLeader
 				s.state.Set(follower)
 				return // deposed
@@ -914,12 +914,12 @@ func (s *Server) leaderSelect() {
 
 // handleRequestVote will modify s.term and s.vote, but nothing else.
 // stepDown means you need to: s.leader=unknownLeader, s.state.Set(Follower).
-func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
+func (s *Server) handleRequestVote(rv requestVote) (requestVoteResponse, bool) {
 	// Spec is ambiguous here; basing this (loosely!) on benbjohnson's impl
 
 	// If the request is from an old term, reject
 	if rv.Term < s.term {
-		return RequestVoteResponse{
+		return requestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
 			reason:      fmt.Sprintf("Term %d < %d", rv.Term, s.term),
@@ -929,7 +929,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	// If the request is from a newer term, reset our state
 	stepDown := false
 	if rv.Term > s.term {
-		s.logGeneric("RequestVote from newer term (%d): we defer", rv.Term)
+		s.logGeneric("requestVote from newer term (%d): we defer", rv.Term)
 		s.term = rv.Term
 		s.vote = noVote
 		s.leader = unknownLeader
@@ -939,7 +939,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	// Special case: if we're the leader, and we haven't been deposed by a more
 	// recent term, then we should always deny the vote
 	if s.state.Get() == leader && !stepDown {
-		return RequestVoteResponse{
+		return requestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
 			reason:      "already the leader",
@@ -951,7 +951,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 		if stepDown {
 			panic("impossible state in handleRequestVote")
 		}
-		return RequestVoteResponse{
+		return requestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
 			reason:      fmt.Sprintf("already cast vote for %d", s.vote),
@@ -960,7 +960,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 
 	// If the candidate log isn't at least as recent as ours, reject
 	if s.log.lastIndex() > rv.LastLogIndex || s.log.lastTerm() > rv.LastLogTerm {
-		return RequestVoteResponse{
+		return requestVoteResponse{
 			Term:        s.term,
 			VoteGranted: false,
 			reason: fmt.Sprintf(
@@ -976,7 +976,7 @@ func (s *Server) handleRequestVote(rv RequestVote) (RequestVoteResponse, bool) {
 	// We passed all the tests: cast vote in favor
 	s.vote = rv.CandidateID
 	s.resetElectionTimeout()
-	return RequestVoteResponse{
+	return requestVoteResponse{
 		Term:        s.term,
 		VoteGranted: true,
 	}, stepDown

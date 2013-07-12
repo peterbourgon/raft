@@ -6,8 +6,8 @@ type appendEntriesTuple struct {
 }
 
 type requestVoteTuple struct {
-	Request  RequestVote
-	Response chan RequestVoteResponse
+	Request  requestVote
+	Response chan requestVoteResponse
 }
 
 // appendEntries represents an appendEntries RPC.
@@ -27,16 +27,16 @@ type appendEntriesResponse struct {
 	reason  string
 }
 
-// RequestVote represents a RequestVote RPC.
-type RequestVote struct {
+// requestVote represents a requestVote RPC.
+type requestVote struct {
 	Term         uint64 `json:"term"`
 	CandidateID  uint64 `json:"candidate_id"`
 	LastLogIndex uint64 `json:"last_log_index"`
 	LastLogTerm  uint64 `json:"last_log_term"`
 }
 
-// RequestVoteResponse represents the response to a RequestVote RPC.
-type RequestVoteResponse struct {
+// requestVoteResponse represents the response to a requestVote RPC.
+type requestVoteResponse struct {
 	Term        uint64 `json:"term"`
 	VoteGranted bool   `json:"vote_granted"`
 	reason      string

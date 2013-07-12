@@ -424,8 +424,8 @@ func (p nonresponsivePeer) ID() uint64 { return uint64(p) }
 func (p nonresponsivePeer) AppendEntries(appendEntries) appendEntriesResponse {
 	return appendEntriesResponse{}
 }
-func (p nonresponsivePeer) RequestVote(RequestVote) RequestVoteResponse {
-	return RequestVoteResponse{}
+func (p nonresponsivePeer) RequestVote(requestVote) requestVoteResponse {
+	return requestVoteResponse{}
 }
 func (p nonresponsivePeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
@@ -440,8 +440,8 @@ func (p approvingPeer) ID() uint64 { return uint64(p) }
 func (p approvingPeer) AppendEntries(appendEntries) appendEntriesResponse {
 	return appendEntriesResponse{}
 }
-func (p approvingPeer) RequestVote(rv RequestVote) RequestVoteResponse {
-	return RequestVoteResponse{
+func (p approvingPeer) RequestVote(rv requestVote) requestVoteResponse {
+	return requestVoteResponse{
 		Term:        rv.Term,
 		VoteGranted: true,
 	}
@@ -459,8 +459,8 @@ func (p disapprovingPeer) ID() uint64 { return uint64(p) }
 func (p disapprovingPeer) AppendEntries(appendEntries) appendEntriesResponse {
 	return appendEntriesResponse{}
 }
-func (p disapprovingPeer) RequestVote(rv RequestVote) RequestVoteResponse {
-	return RequestVoteResponse{
+func (p disapprovingPeer) RequestVote(rv requestVote) requestVoteResponse {
+	return requestVoteResponse{
 		Term:        rv.Term,
 		VoteGranted: false,
 	}

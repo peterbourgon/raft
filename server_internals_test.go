@@ -43,8 +43,8 @@ func TestStrongLeader(t *testing.T) {
 		log:    newRaftLog(&bytes.Buffer{}, noop),
 	}
 
-	// receives a RequestVote from someone also in term=2
-	resp, stepDown := s.handleRequestVote(RequestVote{
+	// receives a requestVote from someone also in term=2
+	resp, stepDown := s.handleRequestVote(requestVote{
 		Term:         2,
 		CandidateID:  3,
 		LastLogIndex: 0,
@@ -245,8 +245,8 @@ func (p serializablePeer) ID() uint64 { return p.MyID }
 func (p serializablePeer) AppendEntries(appendEntries) appendEntriesResponse {
 	return appendEntriesResponse{}
 }
-func (p serializablePeer) RequestVote(RequestVote) RequestVoteResponse {
-	return RequestVoteResponse{}
+func (p serializablePeer) RequestVote(requestVote) requestVoteResponse {
+	return requestVoteResponse{}
 }
 func (p serializablePeer) Command([]byte, chan []byte) error {
 	return fmt.Errorf("%s", p.Err)
