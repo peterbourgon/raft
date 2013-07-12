@@ -231,7 +231,7 @@ func TestNonLeaderExpulsion(t *testing.T) {
 	select {
 	case q := <-s.quit:
 		q <- struct{}{}
-	case <-time.After(MaximumElectionTimeout()):
+	case <-time.After(maximumElectionTimeout()):
 		t.Fatal("didn't shut down")
 	}
 }

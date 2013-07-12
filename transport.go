@@ -307,6 +307,7 @@ func (p *HTTPPeer) rpc(request *bytes.Buffer, path string, response *bytes.Buffe
 	url.Path = path
 	resp, err := http.Post(url.String(), "application/json", request)
 	if err != nil {
+		log.Printf("Raft: HTTP Peer: rpc POST: %s", err)
 		return err
 	}
 	defer resp.Body.Close()

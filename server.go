@@ -40,9 +40,9 @@ var (
 	errAlreadyRunning        = errors.New("already running")
 )
 
-// ResetElectionTimeoutMs sets the minimum and maximum election timeouts to the
+// resetElectionTimeoutMs sets the minimum and maximum election timeouts to the
 // passed values, and returns the old values.
-func ResetElectionTimeoutMs(newMin, newMax int) (int, int) {
+func resetElectionTimeoutMs(newMin, newMax int) (int, int) {
 	oldMin := atomic.LoadInt32(&minimumElectionTimeoutMs)
 	oldMax := atomic.LoadInt32(&maximumElectionTimeoutMs)
 	atomic.StoreInt32(&minimumElectionTimeoutMs, int32(newMin))
@@ -50,21 +50,19 @@ func ResetElectionTimeoutMs(newMin, newMax int) (int, int) {
 	return int(oldMin), int(oldMax)
 }
 
-// MinimumElectionTimeout returns the current minimum election timeout.
-// This is an exported function primarily to help in testing.
-func MinimumElectionTimeout() time.Duration {
+// minimumElectionTimeout returns the current minimum election timeout.
+func minimumElectionTimeout() time.Duration {
 	return time.Duration(minimumElectionTimeoutMs) * time.Millisecond
 }
 
-// MaximumElectionTimeout returns the current maximum election time.
-// This is an exported function primarily to help in testing.
-func MaximumElectionTimeout() time.Duration {
+// maximumElectionTimeout returns the current maximum election time.
+func maximumElectionTimeout() time.Duration {
 	return time.Duration(maximumElectionTimeoutMs) * time.Millisecond
 }
 
-// ElectionTimeout returns a variable time.Duration, between the minimum and
+// electionTimeout returns a variable time.Duration, between the minimum and
 // maximum election timeouts.
-func ElectionTimeout() time.Duration {
+func electionTimeout() time.Duration {
 	n := rand.Intn(int(maximumElectionTimeoutMs - minimumElectionTimeoutMs))
 	d := int(minimumElectionTimeoutMs) + n
 	return time.Duration(d) * time.Millisecond
@@ -286,7 +284,7 @@ func (s *Server) loop() {
 }
 
 func (s *Server) resetElectionTimeout() {
-	s.electionTick = time.NewTimer(ElectionTimeout()).C
+	s.electionTick = time.NewTimer(electionTimeout()).C
 }
 
 func (s *Server) logGeneric(format string, args ...interface{}) {

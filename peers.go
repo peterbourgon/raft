@@ -128,7 +128,7 @@ func (p Peers) requestVotes(r RequestVote) (chan voteResponseTuple, canceler) {
 			tupleChan0 := make(chan voteResponseTuple, len(notYetResponded))
 			for id, peer := range notYetResponded {
 				go func(id0 uint64, peer0 Peer) {
-					resp, err := requestVoteTimeout(peer0, r, 2*MaximumElectionTimeout())
+					resp, err := requestVoteTimeout(peer0, r, 2*maximumElectionTimeout())
 					tupleChan0 <- voteResponseTuple{id0, resp, err}
 				}(id, peer)
 			}

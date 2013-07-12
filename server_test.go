@@ -23,8 +23,8 @@ func init() {
 func TestFollowerToCandidate(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := ResetElectionTimeoutMs(25, 50)
-	defer ResetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
 	server.SetConfiguration(MakePeers(
@@ -39,10 +39,10 @@ func TestFollowerToCandidate(t *testing.T) {
 		t.Fatalf("didn't start as Follower")
 	}
 
-	time.Sleep(MaximumElectionTimeout())
+	time.Sleep(maximumElectionTimeout())
 
-	cutoff := time.Now().Add(2 * MinimumElectionTimeout())
-	backoff := MinimumElectionTimeout()
+	cutoff := time.Now().Add(2 * minimumElectionTimeout())
+	backoff := minimumElectionTimeout()
 	for {
 		if time.Now().After(cutoff) {
 			t.Fatal("failed to become Candidate")
@@ -60,8 +60,8 @@ func TestFollowerToCandidate(t *testing.T) {
 func TestCandidateToLeader(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := ResetElectionTimeoutMs(25, 50)
-	defer ResetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
 	server.SetConfiguration(MakePeers(
@@ -72,10 +72,10 @@ func TestCandidateToLeader(t *testing.T) {
 
 	server.Start()
 	defer server.Stop()
-	time.Sleep(MaximumElectionTimeout())
+	time.Sleep(maximumElectionTimeout())
 
-	cutoff := time.Now().Add(2 * MaximumElectionTimeout())
-	backoff := MaximumElectionTimeout()
+	cutoff := time.Now().Add(2 * maximumElectionTimeout())
+	backoff := maximumElectionTimeout()
 	for {
 		if time.Now().After(cutoff) {
 			t.Fatal("failed to become Leader")
@@ -93,8 +93,8 @@ func TestCandidateToLeader(t *testing.T) {
 func TestFailedElection(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := ResetElectionTimeoutMs(25, 50)
-	defer ResetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
 	server.SetConfiguration(MakePeers(
@@ -105,7 +105,7 @@ func TestFailedElection(t *testing.T) {
 
 	server.Start()
 	defer server.Stop()
-	time.Sleep(2 * ElectionTimeout())
+	time.Sleep(2 * electionTimeout())
 
 	if server.state.Get() == leader {
 		t.Fatalf("erroneously became Leader")
@@ -125,8 +125,8 @@ func TestSimpleConsensus(t *testing.T) {
 	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
 	defer printOnFailure(t, logBuffer)
-	oldMin, oldMax := ResetElectionTimeoutMs(25, 50)
-	defer ResetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	type SetValue struct {
 		Value int32 `json:"value"`
@@ -185,7 +185,7 @@ func TestSimpleConsensus(t *testing.T) {
 			case nil:
 				return
 			case errUnknownLeader:
-				time.Sleep(MinimumElectionTimeout())
+				time.Sleep(minimumElectionTimeout())
 			default:
 				t.Fatal(err)
 			}
@@ -199,7 +199,7 @@ func TestSimpleConsensus(t *testing.T) {
 		t.Logf("didn't receive command response")
 	}
 
-	ticker := time.Tick(MaximumElectionTimeout())
+	ticker := time.Tick(maximumElectionTimeout())
 	timeout := time.After(1 * time.Second)
 	for {
 		select {
@@ -248,8 +248,8 @@ func testOrderTimeout(t *testing.T, nServers int, timeout time.Duration) {
 	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
 	defer printOnFailure(t, logBuffer)
-	oldMin, oldMax := ResetElectionTimeoutMs(50, 100)
-	defer ResetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := resetElectionTimeoutMs(50, 100)
+	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	done := make(chan struct{})
 	go func() { testOrder(t, nServers); close(done) }()
@@ -339,7 +339,7 @@ func testOrder(t *testing.T, nServers int) {
 
 			case errUnknownLeader, errDeposed:
 				log.Printf("command=%d/%d peer=%d: failed (%s) -- will retry", i+1, len(cmds), id, err)
-				time.Sleep(ElectionTimeout())
+				time.Sleep(electionTimeout())
 				continue
 
 			case errTimeout:
@@ -370,7 +370,7 @@ func testOrder(t *testing.T, nServers int) {
 			expected, got := expectedBuffer.String(), sb.String()
 			if len(got) < len(expected) {
 				t.Logf("server %d: not yet fully replicated, will check again", i+1)
-				time.Sleep(MaximumElectionTimeout())
+				time.Sleep(maximumElectionTimeout())
 				continue // retry
 			}
 			if expected != got {

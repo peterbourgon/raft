@@ -339,7 +339,7 @@ func (l *raftLog) commitTo(commitIndex uint64) error {
 				select {
 				case l.entries[pos].commandResponse <- resp:
 					break
-				case <-time.After(MaximumElectionTimeout()): // << ElectionInterval
+				case <-time.After(maximumElectionTimeout()): // << ElectionInterval
 					panic("uncoöperative command response receiver")
 				}
 				close(l.entries[pos].commandResponse)
