@@ -139,9 +139,12 @@ type Server struct {
 	quit         chan chan struct{}
 }
 
-// ApplyFunc is called whenever a new command should be applied to the local
-// client's state machine. commitIndex is guaranteed to be gapless and
-// monotonically increasing, but duplicates may occur.
+// ApplyFunc is a client-provided function that applies a successfully
+// replicated state transition, represented by cmd, to the local state machine,
+// and returns a response. commitIndex is the sequence number of the state
+// transition, and it's guaranteed to be gapless and monotonically increasing,
+// but duplicates may occur. ApplyFuncs are not called concurrently. Therefore,
+// clients should ensure they return quickly (<< MinimumElectionTimeout).
 type ApplyFunc func(commitIndex uint64, cmd []byte) []byte
 
 // NewServer returns an initialized, un-started server. The ID must be unique in
