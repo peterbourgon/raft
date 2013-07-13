@@ -896,7 +896,7 @@ func (s *Server) leaderSelect() {
 			s.logappendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
-				s.logGeneric("after an appendEntries, deposed to Follower (leader=%d)", s.leader)
+				s.logGeneric("after an appendEntries, deposed to Follower (leader=%d)", t.Request.LeaderID)
 				s.leader = t.Request.LeaderID
 				s.state.Set(follower)
 				return // deposed
