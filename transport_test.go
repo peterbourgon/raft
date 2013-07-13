@@ -29,7 +29,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
 	defer printOnFailure(t, logBuffer)
-	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
+	oldMin, oldMax := resetElectionTimeoutMs(100, 200)
 	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	// node = Raft protocol server + a HTTP server + a transport bridge

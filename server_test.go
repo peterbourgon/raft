@@ -265,10 +265,10 @@ func testOrder(t *testing.T, nServers int) {
 
 	// command and response
 	type send struct {
-		Send int `json:"send"`
+		Send int `json:"s"`
 	}
 	type recv struct {
-		Recv int `json:"recv"`
+		Recv int `json:"r"`
 	}
 	do := func(sb *synchronizedBuffer) func(uint64, []byte) []byte {
 		return func(index uint64, cmd []byte) []byte {
