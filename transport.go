@@ -14,24 +14,24 @@ import (
 )
 
 var (
-	// IDPath is where the ID handler (GET) will be installed in the
+	// IDPath is where the ID handler (GET) will be installed by the
 	// HTTPTransport.
 	IDPath = "/raft/id"
 
 	// AppendEntriesPath is where the AppendEntries RPC handler (POST) will be
-	// installed in the HTTPTransport.
+	// installed by the HTTPTransport.
 	AppendEntriesPath = "/raft/appendentries"
 
 	// requestVotePath is where the requestVote RPC handler (POST) will be
-	// installed in the HTTPTransport.
+	// installed by the HTTPTransport.
 	RequestVotePath = "/raft/requestvote"
 
-	// CommandPath is where the Command RPC handler (POST) will be installed in
+	// CommandPath is where the Command RPC handler (POST) will be installed by
 	// the HTTPTransport.
 	CommandPath = "/raft/command"
 
 	// SetConfigurationPath is where the SetConfiguration RPC handler (POST)
-	// will be installed in the HTTPTransport.
+	// will be installed by the HTTPTransport.
 	SetConfigurationPath = "/raft/setconfiguration"
 )
 
@@ -41,33 +41,28 @@ var (
 )
 
 func init() {
-	gob.Register(&HTTPPeer{})
 	json.NewEncoder(&emptyAppendEntriesResponse).Encode(appendEntriesResponse{})
 	json.NewEncoder(&emptyRequestVoteResponse).Encode(requestVoteResponse{})
+	gob.Register(&HTTPPeer{})
 }
 
-// HTTPTransport provides a bridge between a Raft Server and the outside world
-// through HTTP.
-type HTTPTransport struct{}
-
-// Register installs handlers for all of the Raft-domain RPCs in the passed
-// ServeMux at predefined paths. All of those handlers will forward their
-// received RPCs to the passed Server.
-func (t *HTTPTransport) Register(mux *http.ServeMux, s *Server) {
-	mux.HandleFunc(IDPath, t.idHandler(s))
-	mux.HandleFunc(AppendEntriesPath, t.appendEntriesHandler(s))
-	mux.HandleFunc(RequestVotePath, t.requestVoteHandler(s))
-	mux.HandleFunc(CommandPath, t.commandHandler(s))
-	mux.HandleFunc(SetConfigurationPath, t.setConfigurationHandler(s))
+// HTTPTransport creates an ingress bridge from the outside world to the passed
+// server, by registering handlers for all the necessary RPCs in the passed mux.
+func HTTPTransport(mux *http.ServeMux, s *Server) {
+	mux.HandleFunc(IDPath, idHandler(s))
+	mux.HandleFunc(AppendEntriesPath, appendEntriesHandler(s))
+	mux.HandleFunc(RequestVotePath, requestVoteHandler(s))
+	mux.HandleFunc(CommandPath, commandHandler(s))
+	mux.HandleFunc(SetConfigurationPath, setConfigurationHandler(s))
 }
 
-func (t *HTTPTransport) idHandler(s *Server) http.HandlerFunc {
+func idHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(fmt.Sprint(s.ID())))
 	}
 }
 
-func (t *HTTPTransport) appendEntriesHandler(s *Server) http.HandlerFunc {
+func appendEntriesHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
@@ -85,7 +80,7 @@ func (t *HTTPTransport) appendEntriesHandler(s *Server) http.HandlerFunc {
 	}
 }
 
-func (t *HTTPTransport) requestVoteHandler(s *Server) http.HandlerFunc {
+func requestVoteHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
@@ -103,7 +98,7 @@ func (t *HTTPTransport) requestVoteHandler(s *Server) http.HandlerFunc {
 	}
 }
 
-func (t *HTTPTransport) commandHandler(s *Server) http.HandlerFunc {
+func commandHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
@@ -132,7 +127,7 @@ func (t *HTTPTransport) commandHandler(s *Server) http.HandlerFunc {
 	}
 }
 
-func (t *HTTPTransport) setConfigurationHandler(s *Server) http.HandlerFunc {
+func setConfigurationHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
@@ -161,8 +156,8 @@ type commaError struct {
 	Success bool   `json:"success,omitempty"`
 }
 
-// HTTPPeer represents a remote Raft server, which should be exposed to the
-// outside world using a HTTP Transport.
+// HTTPPeer represents a remote Raft server in the local process space. The
+// remote server is expected to be accessible through an HTTPTransport.
 type HTTPPeer struct {
 	id  uint64
 	url url.URL

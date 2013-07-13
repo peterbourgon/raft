@@ -1,7 +1,8 @@
-package raft
+package raft_test
 
 import (
 	"bytes"
+	"github.com/peterbourgon/raft"
 	"net/http"
 	"net/url"
 )
@@ -21,8 +22,8 @@ func ExampleNewServer_http() {
 	}
 
 	// Helper function to construct HTTPPeers
-	mustNewHTTPPeer := func(u url.URL) *HTTPPeer {
-		p, err := NewHTTPPeer(u)
+	mustNewHTTPPeer := func(u url.URL) *raft.HTTPPeer {
+		p, err := raft.NewHTTPPeer(u)
 		if err != nil {
 			panic(err)
 		}
@@ -30,17 +31,16 @@ func ExampleNewServer_http() {
 	}
 
 	// Construct the server
-	s := NewServer(1, &bytes.Buffer{}, a)
+	s := raft.NewServer(1, &bytes.Buffer{}, a)
 
 	// Expose the server using a HTTP transport
 	m := http.NewServeMux()
-	t := HTTPTransport{}
-	t.Register(m, s)
-	go func() { http.ListenAndServe(":8080", m) }()
+	raft.HTTPTransport(m, s)
+	go func() { http.ListenAndServe("10.1.1.10:8080", m) }()
 
 	// Set the initial server configuration, and start the server
-	s.SetConfiguration(MakePeers(
-		mustNewHTTPPeer(mustParseURL("http://localhost:8080")),
+	s.SetConfiguration(raft.MakePeers(
+		mustNewHTTPPeer(mustParseURL("http://10.1.1.10:8080")), // this server
 		mustNewHTTPPeer(mustParseURL("http://10.1.1.11:8080")),
 		mustNewHTTPPeer(mustParseURL("http://10.1.1.12:8080")),
 		mustNewHTTPPeer(mustParseURL("http://10.1.1.13:8080")),

@@ -35,7 +35,6 @@ func testNServersOverHTTP(t *testing.T, n int) {
 	// node = Raft protocol server + a HTTP server + a transport bridge
 	stateMachines := make([]*protectedSlice, n)
 	raftServers := make([]*Server, n)
-	transports := make([]*HTTPTransport, n)
 	httpServers := make([]*httptest.Server, n)
 
 	// create them individually
@@ -48,7 +47,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 
 		// expose that server with a HTTP transport
 		mux := http.NewServeMux()
-		transports[i].Register(mux, raftServers[i])
+		HTTPTransport(mux, raftServers[i])
 
 		// bind the HTTP transport to a concrete HTTP server
 		httpServers[i] = httptest.NewServer(mux)
