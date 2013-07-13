@@ -37,8 +37,8 @@ Several other transports are coming; see TODO, below.
 
 The Raft protocol has no affordance for node discovery or "join/leave"
 semantics. Rather, the protocol assumes an ideal network configuration that's
-known _a priori_ to all nodes in the network, and describes a mechanism (called
-_joint-consensus_) to safely replicate that configuration.
+known _a priori_ to nodes in the network, and describes a mechanism (called
+joint-consensus) to safely replicate that configuration.
 
 My implementation of joint-consensus abides those fundamental assumptions. Nodes
 may be added or removed dynamically by requesting a **SetConfiguration** that
