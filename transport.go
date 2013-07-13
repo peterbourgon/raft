@@ -22,7 +22,7 @@ var (
 	// installed by the HTTPTransport.
 	AppendEntriesPath = "/raft/appendentries"
 
-	// requestVotePath is where the requestVote RPC handler (POST) will be
+	// RequestVotePath is where the requestVote RPC handler (POST) will be
 	// installed by the HTTPTransport.
 	RequestVotePath = "/raft/requestvote"
 
