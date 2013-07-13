@@ -57,7 +57,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 
 		// we have to start the HTTP server, so the NewHTTPPeer ID check works
 		// (it can work without starting the actual Raft protocol server)
-		t.Logf("Server id=%d @ %s", raftServers[i].ID(), httpServers[i].URL)
+		t.Logf("Server id=%d @ %s", raftServers[i].id, httpServers[i].URL)
 	}
 
 	// build the common set of peers in the network

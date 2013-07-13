@@ -58,7 +58,7 @@ func HTTPTransport(mux *http.ServeMux, s *Server) {
 
 func idHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(fmt.Sprint(s.ID())))
+		w.Write([]byte(fmt.Sprint(s.id)))
 	}
 }
 

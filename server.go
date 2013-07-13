@@ -187,9 +187,6 @@ func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 	return s
 }
 
-// ID returns the ID of the server.
-func (s *Server) ID() uint64 { return s.id }
-
 type configurationTuple struct {
 	Peers []Peer
 	Err   chan error
@@ -824,7 +821,7 @@ func (s *Server) leaderSelect() {
 					return
 				}
 				s.config.changeCommitted()
-				if _, ok := s.config.allPeers()[s.ID()]; !ok {
+				if _, ok := s.config.allPeers()[s.id]; !ok {
 					s.logGeneric("leader expelled; shutting down")
 					q := make(chan struct{})
 					s.quit <- q
@@ -1068,7 +1065,7 @@ func (s *Server) handleAppendEntries(r appendEntries) (appendEntriesResponse, bo
 			}
 
 			// Expulsion recognition
-			if _, ok := pm[s.ID()]; !ok {
+			if _, ok := pm[s.id]; !ok {
 				entry.committed = make(chan bool)
 				go func() {
 					if <-entry.committed {

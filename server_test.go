@@ -315,7 +315,7 @@ func testOrder(t *testing.T, nServers int) {
 	for _, server := range servers {
 		server.Start()
 		defer func(server *Server) {
-			log.Printf("issuing stop command to server %d", server.ID())
+			log.Printf("issuing stop command to server %d", server.id)
 			server.Stop()
 		}(server)
 	}
