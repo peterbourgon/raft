@@ -1,3 +1,4 @@
+// Package raft is an implementation of the Raft distributed consensus protocol.
 package raft
 
 import (
