@@ -21,17 +21,17 @@ const (
 // implement joint-consensus.
 type configuration struct {
 	sync.RWMutex
-	state string
-	c_old peerMap
-	c_new peerMap
+	state     string
+	cOldPeers peerMap
+	cNewPeers peerMap
 }
 
 // newConfiguration returns a new configuration in stable (C_old) state based
 // on the passed peers.
 func newConfiguration(pm peerMap) *configuration {
 	return &configuration{
-		state: cOld, // start in a stable state,
-		c_old: pm,   // with only C_old
+		state:     cOld, // start in a stable state,
+		cOldPeers: pm,   // with only C_old
 	}
 }
 
@@ -43,8 +43,8 @@ func (c *configuration) directSet(pm peerMap) error {
 	c.Lock()
 	defer c.Unlock()
 
-	c.c_old = pm
-	c.c_new = peerMap{}
+	c.cOldPeers = pm
+	c.cNewPeers = peerMap{}
 	c.state = cOld
 	return nil
 }
@@ -53,10 +53,10 @@ func (c *configuration) get(id uint64) (Peer, bool) {
 	c.RLock()
 	defer c.RUnlock()
 
-	if peer, ok := c.c_old[id]; ok {
+	if peer, ok := c.cOldPeers[id]; ok {
 		return peer, true
 	}
-	if peer, ok := c.c_new[id]; ok {
+	if peer, ok := c.cNewPeers[id]; ok {
 		return peer, true
 	}
 	return nil, false
@@ -76,10 +76,10 @@ func (c *configuration) allPeers() peerMap {
 	defer c.RUnlock()
 
 	union := peerMap{}
-	for id, peer := range c.c_old {
+	for id, peer := range c.cOldPeers {
 		union[id] = peer
 	}
-	for id, peer := range c.c_new {
+	for id, peer := range c.cNewPeers {
 		union[id] = peer
 	}
 	return union
@@ -93,18 +93,18 @@ func (c *configuration) pass(votes map[uint64]bool) bool {
 	defer c.RUnlock()
 
 	// Count the votes
-	c_oldHave, c_oldRequired := 0, c.c_old.quorum()
-	for id := range c.c_old {
+	cOldHave, cOldRequired := 0, c.cOldPeers.quorum()
+	for id := range c.cOldPeers {
 		if votes[id] {
-			c_oldHave++
+			cOldHave++
 		}
-		if c_oldHave >= c_oldRequired {
+		if cOldHave >= cOldRequired {
 			break
 		}
 	}
 
 	// If we've already failed, we can stop here
-	if c_oldHave < c_oldRequired {
+	if cOldHave < cOldRequired {
 		return false
 	}
 
@@ -114,7 +114,7 @@ func (c *configuration) pass(votes map[uint64]bool) bool {
 	}
 
 	// Not in C_old, so make sure we have some peers in C_new
-	if len(c.c_new) <= 0 {
+	if len(c.cNewPeers) <= 0 {
 		panic(fmt.Sprintf("configuration state '%s', but no C_new peers", c.state))
 	}
 
@@ -122,17 +122,17 @@ func (c *configuration) pass(votes map[uint64]bool) bool {
 	// It's important that we range through C_new and check our votes map, and
 	// not the other way around: if a server casts a vote but doesn't exist in
 	// a particular configuration, that vote should not be counted.
-	c_newHave, c_newRequired := 0, c.c_new.quorum()
-	for id := range c.c_new {
+	cNewHave, cNewRequired := 0, c.cNewPeers.quorum()
+	for id := range c.cNewPeers {
 		if votes[id] {
-			c_newHave++
+			cNewHave++
 		}
-		if c_newHave >= c_newRequired {
+		if cNewHave >= cNewRequired {
 			break
 		}
 	}
 
-	return c_newHave >= c_newRequired
+	return cNewHave >= cNewRequired
 }
 
 // changeTo signals a request to change to the configuration represented by the
@@ -146,11 +146,11 @@ func (c *configuration) changeTo(pm peerMap) error {
 		return errConfigurationAlreadyChanging
 	}
 
-	if len(c.c_new) > 0 {
+	if len(c.cNewPeers) > 0 {
 		panic(fmt.Sprintf("configuration ChangeTo in state '%s', but have C_new peers already", c.state))
 	}
 
-	c.c_new = pm
+	c.cNewPeers = pm
 	c.state = cOldNew
 	return nil
 }
@@ -164,12 +164,12 @@ func (c *configuration) changeCommitted() {
 		panic("configuration ChangeCommitted, but not in C_old,new")
 	}
 
-	if len(c.c_new) <= 0 {
+	if len(c.cNewPeers) <= 0 {
 		panic("configuration ChangeCommitted, but C_new peers are empty")
 	}
 
-	c.c_old = c.c_new
-	c.c_new = peerMap{}
+	c.cOldPeers = c.cNewPeers
+	c.cNewPeers = peerMap{}
 	c.state = cOld
 }
 
@@ -182,6 +182,6 @@ func (c *configuration) changeAborted() {
 		panic("configuration ChangeAborted, but not in C_old,new")
 	}
 
-	c.c_new = peerMap{}
+	c.cNewPeers = peerMap{}
 	c.state = cOld
 }
