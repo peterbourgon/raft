@@ -2,12 +2,13 @@ package raft_test
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/peterbourgon/raft"
 	"net/http"
 	"net/url"
 )
 
-func ExampleNewServer_http() {
+func ExampleNewServer_hTTP() {
 	// A no-op ApplyFunc
 	a := func(uint64, []byte) []byte { return []byte{} }
 
@@ -49,6 +50,14 @@ func ExampleNewServer_http() {
 
 	// Start the server
 	s.Start()
+}
+
+func ExampleServer_Command() {
+	// A no-op ApplyFunc that always returns "PONG"
+	ponger := func(uint64, []byte) []byte { return []byte(`PONG`) }
+
+	// Assuming you have a server started
+	s := raft.NewServer(1, &bytes.Buffer{}, ponger)
 
 	// Issue a command into the network
 	response := make(chan []byte)
@@ -56,6 +65,6 @@ func ExampleNewServer_http() {
 		panic(err) // command not accepted
 	}
 
-	// After the command is replicated, we'll receive the (empty) response
-	<-response
+	// After the command is replicated, we'll receive the response
+	fmt.Printf("%s\n", <-response)
 }

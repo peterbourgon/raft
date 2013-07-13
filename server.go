@@ -142,9 +142,10 @@ type Server struct {
 // ApplyFunc is a client-provided function that should apply a successfully
 // replicated state transition, represented by cmd, to the local state machine,
 // and return a response. commitIndex is the sequence number of the state
-// transition, and it's guaranteed to be gapless and monotonically increasing,
-// but duplicates may occur. ApplyFuncs are not called concurrently. Therefore,
-// clients should ensure they return quickly (<< MinimumElectionTimeout).
+// transition, which is guaranteed to be gapless and monotonically increasing,
+// but not necessarily duplicate-free. ApplyFuncs are not called concurrently.
+// Therefore, clients should ensure they return quickly, i.e. <<
+// MinimumElectionTimeout.
 type ApplyFunc func(commitIndex uint64, cmd []byte) []byte
 
 // NewServer returns an initialized, un-started server. The ID must be unique in
