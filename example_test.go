@@ -22,7 +22,7 @@ func ExampleNewServer_http() {
 	}
 
 	// Helper function to construct HTTPPeers
-	mustNewHTTPPeer := func(u url.URL) *raft.HTTPPeer {
+	mustNewHTTPPeer := func(u url.URL) raft.Peer {
 		p, err := raft.NewHTTPPeer(u)
 		if err != nil {
 			panic(err)
@@ -36,15 +36,26 @@ func ExampleNewServer_http() {
 	// Expose the server using a HTTP transport
 	m := http.NewServeMux()
 	raft.HTTPTransport(m, s)
-	go func() { http.ListenAndServe("10.1.1.10:8080", m) }()
+	go func() { http.ListenAndServe(":8080", m) }()
 
-	// Set the initial server configuration, and start the server
-	s.SetConfiguration(raft.MakePeers(
-		mustNewHTTPPeer(mustParseURL("http://10.1.1.10:8080")), // this server
+	// Set the initial server configuration
+	s.SetConfiguration(
+		mustNewHTTPPeer(mustParseURL("http://127.0.0.1:8080")), // this server
 		mustNewHTTPPeer(mustParseURL("http://10.1.1.11:8080")),
 		mustNewHTTPPeer(mustParseURL("http://10.1.1.12:8080")),
 		mustNewHTTPPeer(mustParseURL("http://10.1.1.13:8080")),
 		mustNewHTTPPeer(mustParseURL("http://10.1.1.14:8080")),
-	))
+	)
+
+	// Start the server
 	s.Start()
+
+	// Issue a command into the network
+	response := make(chan []byte)
+	if err := s.Command([]byte(`PING`), response); err != nil {
+		panic(err) // command not accepted
+	}
+
+	// After the command is replicated, we'll receive the (empty) response
+	<-response
 }

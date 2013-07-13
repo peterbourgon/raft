@@ -27,11 +27,11 @@ func TestFollowerToCandidate(t *testing.T) {
 	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
-	server.SetConfiguration(MakePeers(
+	server.SetConfiguration(
 		newLocalPeer(server),
 		nonresponsivePeer(2),
 		nonresponsivePeer(3),
-	))
+	)
 
 	server.Start()
 	defer server.Stop()
@@ -64,11 +64,11 @@ func TestCandidateToLeader(t *testing.T) {
 	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
-	server.SetConfiguration(MakePeers(
+	server.SetConfiguration(
 		newLocalPeer(server),
 		approvingPeer(2),
 		nonresponsivePeer(3),
-	))
+	)
 
 	server.Start()
 	defer server.Stop()
@@ -97,11 +97,11 @@ func TestFailedElection(t *testing.T) {
 	defer resetElectionTimeoutMs(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
-	server.SetConfiguration(MakePeers(
+	server.SetConfiguration(
 		newLocalPeer(server),
 		disapprovingPeer(2),
 		nonresponsivePeer(3),
-	))
+	)
 
 	server.Start()
 	defer server.Stop()
@@ -163,10 +163,9 @@ func TestSimpleConsensus(t *testing.T) {
 	p1 := newLocalPeer(s1)
 	p2 := newLocalPeer(s2)
 	p3 := newLocalPeer(s3)
-	peers := MakePeers(p1, p2, p3)
-	s1.SetConfiguration(peers)
-	s2.SetConfiguration(peers)
-	s3.SetConfiguration(peers)
+	s1.SetConfiguration(p1, p2, p3)
+	s2.SetConfiguration(p1, p2, p3)
+	s3.SetConfiguration(p1, p2, p3)
 
 	s1.Start()
 	s2.Start()
@@ -181,7 +180,7 @@ func TestSimpleConsensus(t *testing.T) {
 	response := make(chan []byte, 1)
 	func() {
 		for {
-			switch err := p1.Command(cmd, response); err {
+			switch err := p1.callCommand(cmd, response); err {
 			case nil:
 				return
 			case errUnknownLeader:
@@ -291,12 +290,12 @@ func testOrder(t *testing.T, nServers int) {
 		storage = append(storage, &bytes.Buffer{})
 		servers = append(servers, NewServer(uint64(i+1), storage[i], do(buffers[i])))
 	}
-	peers := Peers{}
+	peers := []Peer{}
 	for _, server := range servers {
-		peers[server.ID()] = newLocalPeer(server)
+		peers = append(peers, newLocalPeer(server))
 	}
 	for _, server := range servers {
-		server.SetConfiguration(peers)
+		server.SetConfiguration(peers...)
 	}
 
 	// define cmds
@@ -323,14 +322,15 @@ func testOrder(t *testing.T, nServers int) {
 
 	// send commands
 	for i, cmd := range cmds {
-		id := uint64(rand.Intn(nServers)) + 1
-		peer := peers[id]
+		index := uint64(rand.Intn(nServers))
+		peer := peers[index]
+		id := peer.id()
 		buf, _ := json.Marshal(cmd)
 
 		for {
 			log.Printf("command=%d/%d peer=%d: sending %s", i+1, len(cmds), id, buf)
 			response := make(chan []byte, 1)
-			err := peer.Command(buf, response)
+			err := peer.callCommand(buf, response)
 
 			switch err {
 			case nil:
@@ -420,54 +420,54 @@ func (b *synchronizedBuffer) String() string {
 
 type nonresponsivePeer uint64
 
-func (p nonresponsivePeer) ID() uint64 { return uint64(p) }
-func (p nonresponsivePeer) AppendEntries(appendEntries) appendEntriesResponse {
+func (p nonresponsivePeer) id() uint64 { return uint64(p) }
+func (p nonresponsivePeer) callAppendEntries(appendEntries) appendEntriesResponse {
 	return appendEntriesResponse{}
 }
-func (p nonresponsivePeer) RequestVote(requestVote) requestVoteResponse {
+func (p nonresponsivePeer) callRequestVote(requestVote) requestVoteResponse {
 	return requestVoteResponse{}
 }
-func (p nonresponsivePeer) Command([]byte, chan []byte) error {
+func (p nonresponsivePeer) callCommand([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
-func (p nonresponsivePeer) SetConfiguration(Peers) error {
+func (p nonresponsivePeer) callSetConfiguration(...Peer) error {
 	return fmt.Errorf("not implemented")
 }
 
 type approvingPeer uint64
 
-func (p approvingPeer) ID() uint64 { return uint64(p) }
-func (p approvingPeer) AppendEntries(appendEntries) appendEntriesResponse {
+func (p approvingPeer) id() uint64 { return uint64(p) }
+func (p approvingPeer) callAppendEntries(appendEntries) appendEntriesResponse {
 	return appendEntriesResponse{}
 }
-func (p approvingPeer) RequestVote(rv requestVote) requestVoteResponse {
+func (p approvingPeer) callRequestVote(rv requestVote) requestVoteResponse {
 	return requestVoteResponse{
 		Term:        rv.Term,
 		VoteGranted: true,
 	}
 }
-func (p approvingPeer) Command([]byte, chan []byte) error {
+func (p approvingPeer) callCommand([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
-func (p approvingPeer) SetConfiguration(Peers) error {
+func (p approvingPeer) callSetConfiguration(...Peer) error {
 	return fmt.Errorf("not implemented")
 }
 
 type disapprovingPeer uint64
 
-func (p disapprovingPeer) ID() uint64 { return uint64(p) }
-func (p disapprovingPeer) AppendEntries(appendEntries) appendEntriesResponse {
+func (p disapprovingPeer) id() uint64 { return uint64(p) }
+func (p disapprovingPeer) callAppendEntries(appendEntries) appendEntriesResponse {
 	return appendEntriesResponse{}
 }
-func (p disapprovingPeer) RequestVote(rv requestVote) requestVoteResponse {
+func (p disapprovingPeer) callRequestVote(rv requestVote) requestVoteResponse {
 	return requestVoteResponse{
 		Term:        rv.Term,
 		VoteGranted: false,
 	}
 }
-func (p disapprovingPeer) Command([]byte, chan []byte) error {
+func (p disapprovingPeer) callCommand([]byte, chan []byte) error {
 	return fmt.Errorf("not implemented")
 }
-func (p disapprovingPeer) SetConfiguration(Peers) error {
+func (p disapprovingPeer) callSetConfiguration(...Peer) error {
 	return fmt.Errorf("not implemented")
 }

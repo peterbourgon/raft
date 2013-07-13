@@ -9,15 +9,15 @@ var (
 	errTimeout = errors.New("timeout")
 )
 
-// Peer is the local representation of a remote node. It may be backed by any
-// concrete transport: HTTP, net/rpc, etc. It provides a Raft-domain interface
-// to a server. Peers must be encoding/gob encodable.
+// Peer is the local representation of a remote node. It's an interface that may
+// be backed by any concrete transport: local, HTTP, net/rpc, etc. Peers must be
+// encoding/gob encodable.
 type Peer interface {
-	ID() uint64
-	AppendEntries(appendEntries) appendEntriesResponse
-	RequestVote(requestVote) requestVoteResponse
-	Command([]byte, chan []byte) error
-	SetConfiguration(Peers) error
+	id() uint64
+	callAppendEntries(appendEntries) appendEntriesResponse
+	callRequestVote(requestVote) requestVoteResponse
+	callCommand([]byte, chan []byte) error
+	callSetConfiguration(...Peer) error
 }
 
 // localPeer is the simplest kind of peer, mapped to a server in the
@@ -29,29 +29,29 @@ type localPeer struct {
 
 func newLocalPeer(server *Server) *localPeer { return &localPeer{server} }
 
-func (p *localPeer) ID() uint64 { return p.server.ID() }
+func (p *localPeer) id() uint64 { return p.server.ID() }
 
-func (p *localPeer) AppendEntries(ae appendEntries) appendEntriesResponse {
+func (p *localPeer) callAppendEntries(ae appendEntries) appendEntriesResponse {
 	return p.server.appendEntries(ae)
 }
 
-func (p *localPeer) RequestVote(rv requestVote) requestVoteResponse {
+func (p *localPeer) callRequestVote(rv requestVote) requestVoteResponse {
 	return p.server.requestVote(rv)
 }
 
-func (p *localPeer) Command(cmd []byte, response chan []byte) error {
+func (p *localPeer) callCommand(cmd []byte, response chan []byte) error {
 	return p.server.Command(cmd, response)
 }
 
-func (p *localPeer) SetConfiguration(peers Peers) error {
-	return p.server.SetConfiguration(peers)
+func (p *localPeer) callSetConfiguration(peers ...Peer) error {
+	return p.server.SetConfiguration(peers...)
 }
 
 // requestVoteTimeout issues the requestVote to the given peer.
 // If no response is received before timeout, an error is returned.
 func requestVoteTimeout(p Peer, rv requestVote, timeout time.Duration) (requestVoteResponse, error) {
 	c := make(chan requestVoteResponse, 1)
-	go func() { c <- p.RequestVote(rv) }()
+	go func() { c <- p.callRequestVote(rv) }()
 
 	select {
 	case resp := <-c:
@@ -61,23 +61,31 @@ func requestVoteTimeout(p Peer, rv requestVote, timeout time.Duration) (requestV
 	}
 }
 
-// Peers is a collection of Peer interfaces. It provides some convenience
+// peerMap is a collection of Peer interfaces. It provides some convenience
 // functions for actions that should apply to multiple Peers.
-type Peers map[uint64]Peer
+type peerMap map[uint64]Peer
 
-// MakePeers is a simple helper function to construct a Peers structure from the
-// passed list of peers.
-func MakePeers(peers ...Peer) Peers {
-	p := Peers{}
+// makePeerMap constructs a peerMap from a list of peers.
+func makePeerMap(peers ...Peer) peerMap {
+	pm := peerMap{}
 	for _, peer := range peers {
-		p[peer.ID()] = peer
+		pm[peer.id()] = peer
 	}
-	return p
+	return pm
 }
 
-func (p Peers) except(id uint64) Peers {
-	except := Peers{}
-	for id0, peer := range p {
+// explodePeerMap converts a peerMap into a slice of peers.
+func explodePeerMap(pm peerMap) []Peer {
+	a := []Peer{}
+	for _, peer := range pm {
+		a = append(a, peer)
+	}
+	return a
+}
+
+func (pm peerMap) except(id uint64) peerMap {
+	except := peerMap{}
+	for id0, peer := range pm {
 		if id0 == id {
 			continue
 		}
@@ -86,10 +94,10 @@ func (p Peers) except(id uint64) Peers {
 	return except
 }
 
-func (p Peers) count() int { return len(p) }
+func (pm peerMap) count() int { return len(pm) }
 
-func (p Peers) quorum() int {
-	switch n := len(p); n {
+func (pm peerMap) quorum() int {
+	switch n := len(pm); n {
 	case 0, 1:
 		return 1
 	default:
@@ -103,7 +111,7 @@ func (p Peers) quorum() int {
 // that don't respond within the timeout are retried forever. The retry loop
 // stops only when all peers have responded, or a Cancel signal is sent via the
 // returned Canceler.
-func (p Peers) requestVotes(r requestVote) (chan voteResponseTuple, canceler) {
+func (pm peerMap) requestVotes(r requestVote) (chan voteResponseTuple, canceler) {
 	// "[A server entering the candidate stage] issues requestVote RPCs in
 	// parallel to each of the other servers in the cluster. If the candidate
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
@@ -116,10 +124,10 @@ func (p Peers) requestVotes(r requestVote) (chan voteResponseTuple, canceler) {
 	go func() {
 		// We loop until all Peers have given us a response.
 		// Track which Peers have responded.
-		respondedAlready := Peers{} // none yet
+		respondedAlready := peerMap{} // none yet
 
 		for {
-			notYetResponded := disjoint(p, respondedAlready)
+			notYetResponded := disjoint(pm, respondedAlready)
 			if len(notYetResponded) <= 0 {
 				return // done
 			}
@@ -127,9 +135,9 @@ func (p Peers) requestVotes(r requestVote) (chan voteResponseTuple, canceler) {
 			// scatter
 			tupleChan0 := make(chan voteResponseTuple, len(notYetResponded))
 			for id, peer := range notYetResponded {
-				go func(id0 uint64, peer0 Peer) {
-					resp, err := requestVoteTimeout(peer0, r, 2*maximumElectionTimeout())
-					tupleChan0 <- voteResponseTuple{id0, resp, err}
+				go func(id uint64, peer Peer) {
+					resp, err := requestVoteTimeout(peer, r, 2*maximumElectionTimeout())
+					tupleChan0 <- voteResponseTuple{id, resp, err}
 				}(id, peer)
 			}
 
@@ -167,8 +175,8 @@ type cancel chan struct{}
 
 func (c cancel) Cancel() { close(c) }
 
-func disjoint(all, except Peers) Peers {
-	d := Peers{}
+func disjoint(all, except peerMap) peerMap {
+	d := peerMap{}
 	for id, peer := range all {
 		if _, ok := except[id]; ok {
 			continue

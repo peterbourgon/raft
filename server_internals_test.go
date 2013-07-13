@@ -123,18 +123,18 @@ func TestConfigurationReceipt(t *testing.T) {
 			commitPos: 0,
 		},
 		state:  &protectedString{value: follower},
-		config: newConfiguration(Peers{}),
+		config: newConfiguration(peerMap{}),
 	}
 
 	// receives a configuration change
-	peers := Peers{
-		1: serializablePeer{1, "foo"},
-		2: serializablePeer{2, "bar"},
-		3: serializablePeer{3, "baz"},
-	}
+	pm := makePeerMap(
+		serializablePeer{1, "foo"},
+		serializablePeer{2, "bar"},
+		serializablePeer{3, "baz"},
+	)
 	configurationBuf := &bytes.Buffer{}
 	gob.Register(&serializablePeer{})
-	if err := gob.NewEncoder(configurationBuf).Encode(peers); err != nil {
+	if err := gob.NewEncoder(configurationBuf).Encode(pm); err != nil {
 		t.Fatal(err)
 	}
 
@@ -168,7 +168,7 @@ func TestConfigurationReceipt(t *testing.T) {
 	if !ok {
 		t.Fatal("follower didn't get peer 3")
 	}
-	if peer.ID() != 3 {
+	if peer.id() != 3 {
 		t.Fatal("follower got bad peer 3")
 	}
 }
@@ -185,19 +185,19 @@ func TestNonLeaderExpulsion(t *testing.T) {
 			commitPos: 0,
 		},
 		state:  &protectedString{value: follower},
-		config: newConfiguration(Peers{}),
+		config: newConfiguration(peerMap{}),
 		quit:   make(chan chan struct{}),
 	}
 
 	// receives a configuration change that doesn't include itself
-	peers := Peers{
-		1: serializablePeer{1, "foo"},
-		3: serializablePeer{3, "baz"},
-		5: serializablePeer{5, "bat"},
-	}
+	pm := makePeerMap(
+		serializablePeer{1, "foo"},
+		serializablePeer{3, "baz"},
+		serializablePeer{5, "bat"},
+	)
 	configurationBuf := &bytes.Buffer{}
 	gob.Register(&serializablePeer{})
-	if err := gob.NewEncoder(configurationBuf).Encode(peers); err != nil {
+	if err := gob.NewEncoder(configurationBuf).Encode(pm); err != nil {
 		t.Fatal(err)
 	}
 
@@ -241,16 +241,16 @@ type serializablePeer struct {
 	Err  string
 }
 
-func (p serializablePeer) ID() uint64 { return p.MyID }
-func (p serializablePeer) AppendEntries(appendEntries) appendEntriesResponse {
+func (p serializablePeer) id() uint64 { return p.MyID }
+func (p serializablePeer) callAppendEntries(appendEntries) appendEntriesResponse {
 	return appendEntriesResponse{}
 }
-func (p serializablePeer) RequestVote(requestVote) requestVoteResponse {
+func (p serializablePeer) callRequestVote(requestVote) requestVoteResponse {
 	return requestVoteResponse{}
 }
-func (p serializablePeer) Command([]byte, chan []byte) error {
+func (p serializablePeer) callCommand([]byte, chan []byte) error {
 	return fmt.Errorf("%s", p.Err)
 }
-func (p serializablePeer) SetConfiguration(Peers) error {
+func (p serializablePeer) callSetConfiguration(...Peer) error {
 	return fmt.Errorf("%s", p.Err)
 }

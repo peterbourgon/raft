@@ -43,11 +43,11 @@ var (
 func init() {
 	json.NewEncoder(&emptyAppendEntriesResponse).Encode(appendEntriesResponse{})
 	json.NewEncoder(&emptyRequestVoteResponse).Encode(requestVoteResponse{})
-	gob.Register(&HTTPPeer{})
+	gob.Register(&httpPeer{})
 }
 
 // HTTPTransport creates an ingress bridge from the outside world to the passed
-// server, by registering handlers for all the necessary RPCs in the passed mux.
+// server, by installing handlers for all the necessary RPCs to the passed mux.
 func HTTPTransport(mux *http.ServeMux, s *Server) {
 	mux.HandleFunc(IDPath, idHandler(s))
 	mux.HandleFunc(AppendEntriesPath, appendEntriesHandler(s))
@@ -131,14 +131,14 @@ func setConfigurationHandler(s *Server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
 
-		var peers Peers
-		if err := gob.NewDecoder(r.Body).Decode(&peers); err != nil {
+		var pm peerMap
+		if err := gob.NewDecoder(r.Body).Decode(&pm); err != nil {
 			errBuf, _ := json.Marshal(commaError{err.Error(), false})
 			http.Error(w, string(errBuf), http.StatusBadRequest)
 			return
 		}
 
-		if err := s.SetConfiguration(peers); err != nil {
+		if err := s.SetConfiguration(explodePeerMap(pm)...); err != nil {
 			errBuf, _ := json.Marshal(commaError{err.Error(), false})
 			http.Error(w, string(errBuf), http.StatusInternalServerError)
 			return
@@ -158,15 +158,15 @@ type commaError struct {
 
 // HTTPPeer represents a remote Raft server in the local process space. The
 // remote server is expected to be accessible through an HTTPTransport.
-type HTTPPeer struct {
-	id  uint64
-	url url.URL
+type httpPeer struct {
+	remoteID uint64
+	url      url.URL
 }
 
-// NewHTTPPeer constructs a new HTTP peer. Part of construction involves
-// making a HTTP GET request against the IDPath to resolve the remote server's
-// ID.
-func NewHTTPPeer(u url.URL) (*HTTPPeer, error) {
+// NewHTTPPeer constructs a new HTTP peer. Part of construction involves making
+// a HTTP GET request against the passed URL at IDPath, to resolve the remote
+// server's ID.
+func NewHTTPPeer(u url.URL) (Peer, error) {
 	u.Path = ""
 
 	idURL := u
@@ -189,19 +189,19 @@ func NewHTTPPeer(u url.URL) (*HTTPPeer, error) {
 		return nil, fmt.Errorf("invalid peer ID %d", id)
 	}
 
-	return &HTTPPeer{
-		id:  id,
-		url: u,
+	return &httpPeer{
+		remoteID: id,
+		url:      u,
 	}, nil
 }
 
-// ID returns the Raft-domain ID retrieved during construction of the HTTPPeer.
-func (p *HTTPPeer) ID() uint64 { return p.id }
+// ID returns the Raft-domain ID retrieved during construction of the httpPeer.
+func (p *httpPeer) id() uint64 { return p.remoteID }
 
 // AppendEntries triggers a AppendEntries RPC to the remote server, and
 // returns the response. Errors at the transport layers are logged, and
-// represented by a default (unsuccessful) response
-func (p *HTTPPeer) AppendEntries(ae appendEntries) appendEntriesResponse {
+// represented by a default (unsuccessful) response.
+func (p *httpPeer) callAppendEntries(ae appendEntries) appendEntriesResponse {
 	var aer appendEntriesResponse
 
 	var body bytes.Buffer
@@ -227,7 +227,7 @@ func (p *HTTPPeer) AppendEntries(ae appendEntries) appendEntriesResponse {
 // RequestVote triggers a requestVote RPC to the remote server, and
 // returns the response. Errors at the transport layers are logged, and
 // represented by a default (unsuccessful) response.
-func (p *HTTPPeer) RequestVote(rv requestVote) requestVoteResponse {
+func (p *httpPeer) callRequestVote(rv requestVote) requestVoteResponse {
 	var rvr requestVoteResponse
 
 	var body bytes.Buffer
@@ -254,7 +254,7 @@ func (p *HTTPPeer) RequestVote(rv requestVote) requestVoteResponse {
 // transport or application layer is returned synchronously. If no error
 // occurs, the response (the output of the remote server's ApplyFunc) is
 // eventually sent on the passed response chan.
-func (p *HTTPPeer) Command(cmd []byte, response chan []byte) error {
+func (p *httpPeer) callCommand(cmd []byte, response chan []byte) error {
 	errChan := make(chan error)
 	go func() {
 		var responseBuf bytes.Buffer
@@ -272,7 +272,7 @@ func (p *HTTPPeer) Command(cmd []byte, response chan []byte) error {
 // server. Any error at the transport or application layer is returned
 // synchronously. If no error occurs, clients may assume the passed
 // configuration has been accepted and will be replicated via joint-consensus.
-func (p *HTTPPeer) SetConfiguration(peers Peers) error {
+func (p *httpPeer) callSetConfiguration(peers ...Peer) error {
 	buf := &bytes.Buffer{}
 	if err := gob.NewEncoder(buf).Encode(&peers); err != nil {
 		log.Printf("Raft: HTTP Peer: SetConfiguration: encode request: %s", err)
@@ -297,7 +297,7 @@ func (p *HTTPPeer) SetConfiguration(peers Peers) error {
 	return nil
 }
 
-func (p *HTTPPeer) rpc(request *bytes.Buffer, path string, response *bytes.Buffer) error {
+func (p *httpPeer) rpc(request *bytes.Buffer, path string, response *bytes.Buffer) error {
 	url := p.url
 	url.Path = path
 	resp, err := http.Post(url.String(), "application/json", request)

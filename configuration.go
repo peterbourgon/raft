@@ -22,16 +22,16 @@ const (
 type configuration struct {
 	sync.RWMutex
 	state string
-	c_old Peers
-	c_new Peers
+	c_old peerMap
+	c_new peerMap
 }
 
 // newConfiguration returns a new configuration in stable (C_old) state based
 // on the passed peers.
-func newConfiguration(peers Peers) *configuration {
+func newConfiguration(pm peerMap) *configuration {
 	return &configuration{
-		state: cOld,  // start in a stable state,
-		c_old: peers, // with only C_old
+		state: cOld, // start in a stable state,
+		c_old: pm,   // with only C_old
 	}
 }
 
@@ -39,12 +39,12 @@ func newConfiguration(peers Peers) *configuration {
 // configuration from a leader. It directly sets the configuration to the
 // passed peers. It's assumed this is called on a non-leader, and therefore
 // requires no consistency dance.
-func (c *configuration) directSet(peers Peers) error {
+func (c *configuration) directSet(pm peerMap) error {
 	c.Lock()
 	defer c.Unlock()
 
-	c.c_old = peers
-	c.c_new = Peers{}
+	c.c_old = pm
+	c.c_new = peerMap{}
 	c.state = cOld
 	return nil
 }
@@ -71,11 +71,11 @@ func (c *configuration) encode() ([]byte, error) {
 }
 
 // allPeers returns the union set of all peers in the configuration.
-func (c *configuration) allPeers() Peers {
+func (c *configuration) allPeers() peerMap {
 	c.RLock()
 	defer c.RUnlock()
 
-	union := Peers{}
+	union := peerMap{}
 	for id, peer := range c.c_old {
 		union[id] = peer
 	}
@@ -138,7 +138,7 @@ func (c *configuration) pass(votes map[uint64]bool) bool {
 // changeTo signals a request to change to the configuration represented by the
 // passed peers. changeTo puts the configuration in the C_old,new state.
 // changeTo should be eventually followed by ChangeCommitted or ChangeAborted.
-func (c *configuration) changeTo(peers Peers) error {
+func (c *configuration) changeTo(pm peerMap) error {
 	c.Lock()
 	defer c.Unlock()
 
@@ -150,7 +150,7 @@ func (c *configuration) changeTo(peers Peers) error {
 		panic(fmt.Sprintf("configuration ChangeTo in state '%s', but have C_new peers already", c.state))
 	}
 
-	c.c_new = peers
+	c.c_new = pm
 	c.state = cOldNew
 	return nil
 }
@@ -169,7 +169,7 @@ func (c *configuration) changeCommitted() {
 	}
 
 	c.c_old = c.c_new
-	c.c_new = Peers{}
+	c.c_new = peerMap{}
 	c.state = cOld
 }
 
@@ -182,6 +182,6 @@ func (c *configuration) changeAborted() {
 		panic("configuration ChangeAborted, but not in C_old,new")
 	}
 
-	c.c_new = Peers{}
+	c.c_new = peerMap{}
 	c.state = cOld
 }

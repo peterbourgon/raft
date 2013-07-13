@@ -139,9 +139,9 @@ type Server struct {
 	quit         chan chan struct{}
 }
 
-// ApplyFunc is a client-provided function that applies a successfully
+// ApplyFunc is a client-provided function that should apply a successfully
 // replicated state transition, represented by cmd, to the local state machine,
-// and returns a response. commitIndex is the sequence number of the state
+// and return a response. commitIndex is the sequence number of the state
 // transition, and it's guaranteed to be gapless and monotonically increasing,
 // but duplicates may occur. ApplyFuncs are not called concurrently. Therefore,
 // clients should ensure they return quickly (<< MinimumElectionTimeout).
@@ -172,7 +172,7 @@ func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 		leader:  unknownLeader, // unknown at startup
 		log:     log,
 		term:    latestTerm,
-		config:  newConfiguration(Peers{}),
+		config:  newConfiguration(peerMap{}),
 
 		appendEntriesChan: make(chan appendEntriesTuple),
 		requestVoteChan:   make(chan requestVoteTuple),
@@ -190,7 +190,7 @@ func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 func (s *Server) ID() uint64 { return s.id }
 
 type configurationTuple struct {
-	Peers Peers
+	Peers []Peer
 	Err   chan error
 }
 
@@ -199,9 +199,9 @@ type configurationTuple struct {
 // SetConfiguration must be called before starting the server. Calls to
 // SetConfiguration after the server has been started will be replicated
 // throughout the Raft network using the joint-consensus mechanism.
-func (s *Server) SetConfiguration(peers Peers) error {
+func (s *Server) SetConfiguration(peers ...Peer) error {
 	if !s.running.Get() {
-		s.config.directSet(peers)
+		s.config.directSet(makePeerMap(peers...))
 		return nil
 	}
 
@@ -350,7 +350,7 @@ func (s *Server) forwardCommand(t commandTuple) {
 		// We're blocking our {follower,candidate}Select function in the
 		// receive-command branch. If we continue to block while forwarding
 		// the command, the leader won't be able to get a response from us!
-		go func() { t.Err <- leader.Command(t.Command, t.CommandResponse) }()
+		go func() { t.Err <- leader.callCommand(t.Command, t.CommandResponse) }()
 	}
 }
 
@@ -369,7 +369,7 @@ func (s *Server) forwardConfiguration(t configurationTuple) {
 			panic("invalid state in peers")
 		}
 		s.logGeneric("got configuration, forwarding to leader (%d)", s.leader)
-		go func() { t.Err <- leader.SetConfiguration(t.Peers) }()
+		go func() { t.Err <- leader.callSetConfiguration(t.Peers...) }()
 	}
 }
 
@@ -567,11 +567,11 @@ type nextIndex struct {
 	m map[uint64]uint64 // followerId: nextIndex
 }
 
-func newNextIndex(peers Peers, defaultNextIndex uint64) *nextIndex {
+func newNextIndex(pm peerMap, defaultNextIndex uint64) *nextIndex {
 	ni := &nextIndex{
 		m: map[uint64]uint64{},
 	}
-	for id := range peers {
+	for id := range pm {
 		ni.m[id] = defaultNextIndex
 	}
 	return ni
@@ -648,13 +648,13 @@ func (ni *nextIndex) set(id, index, prev uint64) (uint64, error) {
 //
 // flush is synchronous and can block forever if the peer is nonresponsive.
 func (s *Server) flush(peer Peer, ni *nextIndex) error {
-	peerID := peer.ID()
+	peerID := peer.id()
 	currentTerm := s.term
 	prevLogIndex := ni.prevLogIndex(peerID)
 	entries, prevLogTerm := s.log.entriesAfter(prevLogIndex)
 	commitIndex := s.log.getCommitIndex()
 	s.logGeneric("flush to %d: term=%d leaderId=%d prevLogIndex/Term=%d/%d sz=%d commitIndex=%d", peerID, currentTerm, s.id, prevLogIndex, prevLogTerm, len(entries), commitIndex)
-	resp := peer.AppendEntries(appendEntries{
+	resp := peer.callAppendEntries(appendEntries{
 		Term:         currentTerm,
 		LeaderID:     s.id,
 		PrevLogIndex: prevLogIndex,
@@ -682,7 +682,7 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 	}
 
 	if len(entries) > 0 {
-		newPrevLogIndex, err := ni.set(peer.ID(), entries[len(entries)-1].Index, prevLogIndex)
+		newPrevLogIndex, err := ni.set(peer.id(), entries[len(entries)-1].Index, prevLogIndex)
 		if err != nil {
 			s.logGeneric("flush to %d: while moving prevLogIndex forward: %s", peerID, err)
 			return err
@@ -698,18 +698,18 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 // concurrentFlush triggers a concurrent flush to each of the peers. All peers
 // must respond (or timeout) before concurrentFlush will return. timeout is per
 // peer.
-func (s *Server) concurrentFlush(peers Peers, ni *nextIndex, timeout time.Duration) (int, bool) {
+func (s *Server) concurrentFlush(pm peerMap, ni *nextIndex, timeout time.Duration) (int, bool) {
 	type tuple struct {
 		id  uint64
 		err error
 	}
-	responses := make(chan tuple, len(peers))
-	for _, peer := range peers {
-		go func(peer0 Peer) {
-			err0 := make(chan error, 1)
-			go func() { err0 <- s.flush(peer0, ni) }()
-			go func() { time.Sleep(timeout); err0 <- errTimeout }()
-			responses <- tuple{peer0.ID(), <-err0} // first responder wins
+	responses := make(chan tuple, len(pm))
+	for _, peer := range pm {
+		go func(peer Peer) {
+			errChan := make(chan error, 1)
+			go func() { errChan <- s.flush(peer, ni) }()
+			go func() { time.Sleep(timeout); errChan <- errTimeout }()
+			responses <- tuple{peer.id(), <-errChan} // first responder wins
 		}(peer)
 	}
 
@@ -795,7 +795,7 @@ func (s *Server) leaderSelect() {
 
 		case t := <-s.configurationChan:
 			// Attempt to change our local configuration
-			if err := s.config.changeTo(t.Peers); err != nil {
+			if err := s.config.changeTo(makePeerMap(t.Peers...)); err != nil {
 				t.Err <- err
 				continue
 			}
@@ -1045,10 +1045,10 @@ func (s *Server) handleAppendEntries(r appendEntries) (appendEntriesResponse, bo
 	// Process the entries
 	for i, entry := range r.Entries {
 		// Configuration changes requre special preprocessing
-		var peers Peers
+		var pm peerMap
 		if entry.isConfiguration {
 			commandBuf := bytes.NewBuffer(entry.Command)
-			if err := gob.NewDecoder(commandBuf).Decode(&peers); err != nil {
+			if err := gob.NewDecoder(commandBuf).Decode(&pm); err != nil {
 				panic("gob decode of peers failed")
 			}
 
@@ -1067,7 +1067,7 @@ func (s *Server) handleAppendEntries(r appendEntries) (appendEntriesResponse, bo
 			}
 
 			// Expulsion recognition
-			if _, ok := peers[s.ID()]; !ok {
+			if _, ok := pm[s.ID()]; !ok {
 				entry.committed = make(chan bool)
 				go func() {
 					if <-entry.committed {
@@ -1098,7 +1098,7 @@ func (s *Server) handleAppendEntries(r appendEntries) (appendEntriesResponse, bo
 		// uses that configuration for all future decisions (it does not wait
 		// for the entry to become committed)."
 		if entry.isConfiguration {
-			if err := s.config.directSet(peers); err != nil {
+			if err := s.config.directSet(pm); err != nil {
 				return appendEntriesResponse{
 					Term:    s.term,
 					Success: false,

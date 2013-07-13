@@ -61,7 +61,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 	}
 
 	// build the common set of peers in the network
-	peers := Peers{}
+	peers := []Peer{}
 	for i := 0; i < n; i++ {
 		u, err := url.Parse(httpServers[i].URL)
 		if err != nil {
@@ -71,12 +71,12 @@ func testNServersOverHTTP(t *testing.T, n int) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		peers[peer.ID()] = peer
+		peers = append(peers, peer)
 	}
 
 	// inject each Raft protocol server with its peers
 	for _, raftServer := range raftServers {
-		raftServer.SetConfiguration(peers)
+		raftServer.SetConfiguration(peers...)
 	}
 
 	// start each Raft protocol server
