@@ -27,8 +27,8 @@ it's the simplest way to embed a Raft server in your application. See [this
 complete example][example-http].
 
 [httpt]: http://godoc.org/github.com/peterbourgon/raft#HTTPTransport
-[httpp]: http://godoc.org/github.com/peterbourgon/raft#HTTPPeer
-[example-http]: http://godoc.org/github.com/peterbourgon/raft#_example_NewServer--Http
+[httpp]: http://godoc.org/github.com/peterbourgon/raft#NewHTTPPeer
+[example-http]: http://godoc.org/github.com/peterbourgon/raft#_example_NewServer--HTTP
 
 Several other transports are coming; see TODO, below.
 
