@@ -22,7 +22,7 @@ func ExampleNewServer_hTTP() {
 		return *u
 	}
 
-	// Helper function to construct HTTPPeers
+	// Helper function to construct HTTP Peers
 	mustNewHTTPPeer := func(u url.URL) raft.Peer {
 		p, err := raft.NewHTTPPeer(u)
 		if err != nil {
