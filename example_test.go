@@ -35,9 +35,8 @@ func ExampleNewServer_hTTP() {
 	s := raft.NewServer(1, &bytes.Buffer{}, a)
 
 	// Expose the server using a HTTP transport
-	m := http.NewServeMux()
-	raft.HTTPTransport(m, s)
-	go func() { http.ListenAndServe(":8080", m) }()
+	raft.HTTPTransport(http.DefaultServeMux, s)
+	go func() { http.ListenAndServe(":8080", nil) }()
 
 	// Set the initial server configuration
 	s.SetConfiguration(
