@@ -151,9 +151,11 @@ type ApplyFunc func(commitIndex uint64, cmd []byte) []byte
 
 // NewServer returns an initialized, un-started server. The ID must be unique in
 // the Raft network, and greater than 0. The store will be used by the
-// distributed log as a persistence layer. The apply function will be called
-// whenever a (user-domain) command has been safely replicated to this server,
-// and can be considered committed.
+// distributed log as a persistence layer. It's read-from during creation, in
+// case a crashed server is restarted over an already-persisted log. Then, it's
+// written-to during normal operations, when log entries are safely replicated.
+// ApplyFunc will be called whenever a (user-domain) command has been safely
+// replicated and committed to this server's log.
 //
 // NewServer creates a server, but you'll need to couple it with a transport to
 // make it usable. See the example(s) for usage scenarios.
