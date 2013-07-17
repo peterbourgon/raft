@@ -427,7 +427,7 @@ func (p nonresponsivePeer) callAppendEntries(appendEntries) appendEntriesRespons
 func (p nonresponsivePeer) callRequestVote(requestVote) requestVoteResponse {
 	return requestVoteResponse{}
 }
-func (p nonresponsivePeer) callCommand([]byte, chan []byte) error {
+func (p nonresponsivePeer) callCommand([]byte, chan<- []byte) error {
 	return fmt.Errorf("not implemented")
 }
 func (p nonresponsivePeer) callSetConfiguration(...Peer) error {
@@ -446,7 +446,7 @@ func (p approvingPeer) callRequestVote(rv requestVote) requestVoteResponse {
 		VoteGranted: true,
 	}
 }
-func (p approvingPeer) callCommand([]byte, chan []byte) error {
+func (p approvingPeer) callCommand([]byte, chan<- []byte) error {
 	return fmt.Errorf("not implemented")
 }
 func (p approvingPeer) callSetConfiguration(...Peer) error {
@@ -465,7 +465,7 @@ func (p disapprovingPeer) callRequestVote(rv requestVote) requestVoteResponse {
 		VoteGranted: false,
 	}
 }
-func (p disapprovingPeer) callCommand([]byte, chan []byte) error {
+func (p disapprovingPeer) callCommand([]byte, chan<- []byte) error {
 	return fmt.Errorf("not implemented")
 }
 func (p disapprovingPeer) callSetConfiguration(...Peer) error {

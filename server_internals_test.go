@@ -248,7 +248,7 @@ func (p serializablePeer) callAppendEntries(appendEntries) appendEntriesResponse
 func (p serializablePeer) callRequestVote(requestVote) requestVoteResponse {
 	return requestVoteResponse{}
 }
-func (p serializablePeer) callCommand([]byte, chan []byte) error {
+func (p serializablePeer) callCommand([]byte, chan<- []byte) error {
 	return fmt.Errorf("%s", p.Err)
 }
 func (p serializablePeer) callSetConfiguration(...Peer) error {

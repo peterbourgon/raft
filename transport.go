@@ -254,7 +254,7 @@ func (p *httpPeer) callRequestVote(rv requestVote) requestVoteResponse {
 // transport or application layer is returned synchronously. If no error
 // occurs, the response (the output of the remote server's ApplyFunc) is
 // eventually sent on the passed response chan.
-func (p *httpPeer) callCommand(cmd []byte, response chan []byte) error {
+func (p *httpPeer) callCommand(cmd []byte, response chan<- []byte) error {
 	errChan := make(chan error)
 	go func() {
 		var responseBuf bytes.Buffer

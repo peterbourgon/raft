@@ -224,7 +224,7 @@ func (s *Server) Stop() {
 
 type commandTuple struct {
 	Command         []byte
-	CommandResponse chan []byte
+	CommandResponse chan<- []byte
 	Err             chan error
 }
 
@@ -233,7 +233,7 @@ type commandTuple struct {
 // command gets committed to the local server log, it's passed to the apply
 // function, and the response from that function is provided on the
 // passed response chan.
-func (s *Server) Command(cmd []byte, response chan []byte) error {
+func (s *Server) Command(cmd []byte, response chan<- []byte) error {
 	err := make(chan error)
 	s.commandChan <- commandTuple{cmd, response, err}
 	return <-err

@@ -383,12 +383,12 @@ func (l *raftLog) commitTo(commitIndex uint64) error {
 // executed against the node state machine when the log entry is successfully
 // replicated.
 type logEntry struct {
-	Index           uint64      `json:"index"`
-	Term            uint64      `json:"term"` // when received by leader
-	Command         []byte      `json:"command,omitempty"`
-	committed       chan bool   `json:"-"`
-	commandResponse chan []byte `json:"-"` // only non-nil on receiver's log
-	isConfiguration bool        `json:"-"` // for configuration change entries
+	Index           uint64        `json:"index"`
+	Term            uint64        `json:"term"` // when received by leader
+	Command         []byte        `json:"command,omitempty"`
+	committed       chan bool     `json:"-"`
+	commandResponse chan<- []byte `json:"-"` // only non-nil on receiver's log
+	isConfiguration bool          `json:"-"` // for configuration change entries
 }
 
 // encode serializes the log entry to the passed io.Writer.

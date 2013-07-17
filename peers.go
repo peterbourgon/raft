@@ -16,7 +16,7 @@ type Peer interface {
 	id() uint64
 	callAppendEntries(appendEntries) appendEntriesResponse
 	callRequestVote(requestVote) requestVoteResponse
-	callCommand([]byte, chan []byte) error
+	callCommand([]byte, chan<- []byte) error
 	callSetConfiguration(...Peer) error
 }
 
@@ -39,7 +39,7 @@ func (p *localPeer) callRequestVote(rv requestVote) requestVoteResponse {
 	return p.server.requestVote(rv)
 }
 
-func (p *localPeer) callCommand(cmd []byte, response chan []byte) error {
+func (p *localPeer) callCommand(cmd []byte, response chan<- []byte) error {
 	return p.server.Command(cmd, response)
 }
 
