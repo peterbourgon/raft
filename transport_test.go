@@ -67,7 +67,7 @@ func testNServersOverHTTP(t *testing.T, n int) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		peer, err := NewHTTPPeer(*u)
+		peer, err := NewHTTPPeer(u)
 		if err != nil {
 			t.Fatal(err)
 		}

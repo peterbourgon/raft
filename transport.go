@@ -160,16 +160,16 @@ type commaError struct {
 // remote server is expected to be accessible through an HTTPTransport.
 type httpPeer struct {
 	remoteID uint64
-	url      url.URL
+	url      *url.URL
 }
 
 // NewHTTPPeer constructs a new HTTP peer. Part of construction involves making
 // a HTTP GET request against the passed URL at IDPath, to resolve the remote
 // server's ID.
-func NewHTTPPeer(u url.URL) (Peer, error) {
-	u.Path = ""
+func NewHTTPPeer(url *url.URL) (Peer, error) {
+	url.Path = ""
 
-	idURL := u
+	idURL := *url
 	idURL.Path = IDPath
 	resp, err := http.Get(idURL.String())
 	if err != nil {
@@ -191,7 +191,7 @@ func NewHTTPPeer(u url.URL) (Peer, error) {
 
 	return &httpPeer{
 		remoteID: id,
-		url:      u,
+		url:      url,
 	}, nil
 }
 
@@ -298,7 +298,7 @@ func (p *httpPeer) callSetConfiguration(peers ...Peer) error {
 }
 
 func (p *httpPeer) rpc(request *bytes.Buffer, path string, response *bytes.Buffer) error {
-	url := p.url
+	url := *p.url
 	url.Path = path
 	resp, err := http.Post(url.String(), "application/json", request)
 	if err != nil {

@@ -13,17 +13,17 @@ func ExampleNewServer_hTTP() {
 	a := func(uint64, []byte) []byte { return []byte{} }
 
 	// Helper function to parse URLs
-	mustParseURL := func(rawurl string) url.URL {
+	mustParseURL := func(rawurl string) *url.URL {
 		u, err := url.Parse(rawurl)
 		if err != nil {
 			panic(err)
 		}
 		u.Path = ""
-		return *u
+		return u
 	}
 
 	// Helper function to construct HTTP Peers
-	mustNewHTTPPeer := func(u url.URL) raft.Peer {
+	mustNewHTTPPeer := func(u *url.URL) raft.Peer {
 		p, err := raft.NewHTTPPeer(u)
 		if err != nil {
 			panic(err)
