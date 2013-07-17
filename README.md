@@ -55,7 +55,7 @@ describes a complete network topology.
 * Other transports?
 * ~~Configuration changes (joint-consensus mode)~~ _done_
 * Log compaction
-* Robust demo application ☜ **up next**
+* Robust demo application ☜ **in progress**
 * Complex unit tests (one per scenario described in the paper)
 
 [netrpc]: http://golang.org/pkg/net/rpc
