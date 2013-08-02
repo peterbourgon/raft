@@ -82,7 +82,7 @@ leader, just like a user command. Followers intercept the configuration-change
 command and use it to manipulate their configuration.
 
 handleAppendEntries should attempt to unmarshal the command as a Configuration
-change. Followers don't propegate the configuration-change command to the user
+change. Followers don't propagate the configuration-change command to the user
 state machine.
 
 
@@ -173,7 +173,7 @@ _prefix of 18_
 
 A leader that finds it's not a part of a new configuration change should step
 down immediately after committing that change, but not before. The apply()
-mechanism could be leveraged for this behavior. See **12**. Stepping down can by
+mechanism could be leveraged for this behavior. See **12**. Stepping down can be
 synonymous with exiting its select loop -- the same behavior as followers.
 
 
