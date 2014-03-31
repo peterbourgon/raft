@@ -27,13 +27,13 @@ const (
 )
 
 var (
-	// MinimumElectionTimeoutMs can be set at package initialization. It may be
+	// MinimumElectionTimeoutMS can be set at package initialization. It may be
 	// raised to achieve more reliable replication in slow networks, or lowered
 	// to achieve faster replication in fast networks. Lowering is not
 	// recommended.
-	MinimumElectionTimeoutMs int32 = 250
+	MinimumElectionTimeoutMS int32 = 250
 
-	maximumElectionTimeoutMs = 2 * MinimumElectionTimeoutMs
+	maximumElectionTimeoutMS = 2 * MinimumElectionTimeoutMS
 )
 
 var (
@@ -49,28 +49,28 @@ var (
 // resetElectionTimeoutMs sets the minimum and maximum election timeouts to the
 // passed values, and returns the old values.
 func resetElectionTimeoutMs(newMin, newMax int) (int, int) {
-	oldMin := atomic.LoadInt32(&MinimumElectionTimeoutMs)
-	oldMax := atomic.LoadInt32(&maximumElectionTimeoutMs)
-	atomic.StoreInt32(&MinimumElectionTimeoutMs, int32(newMin))
-	atomic.StoreInt32(&maximumElectionTimeoutMs, int32(newMax))
+	oldMin := atomic.LoadInt32(&MinimumElectionTimeoutMS)
+	oldMax := atomic.LoadInt32(&maximumElectionTimeoutMS)
+	atomic.StoreInt32(&MinimumElectionTimeoutMS, int32(newMin))
+	atomic.StoreInt32(&maximumElectionTimeoutMS, int32(newMax))
 	return int(oldMin), int(oldMax)
 }
 
 // minimumElectionTimeout returns the current minimum election timeout.
 func minimumElectionTimeout() time.Duration {
-	return time.Duration(MinimumElectionTimeoutMs) * time.Millisecond
+	return time.Duration(MinimumElectionTimeoutMS) * time.Millisecond
 }
 
 // maximumElectionTimeout returns the current maximum election time.
 func maximumElectionTimeout() time.Duration {
-	return time.Duration(maximumElectionTimeoutMs) * time.Millisecond
+	return time.Duration(maximumElectionTimeoutMS) * time.Millisecond
 }
 
 // electionTimeout returns a variable time.Duration, between the minimum and
 // maximum election timeouts.
 func electionTimeout() time.Duration {
-	n := rand.Intn(int(maximumElectionTimeoutMs - MinimumElectionTimeoutMs))
-	d := int(MinimumElectionTimeoutMs) + n
+	n := rand.Intn(int(maximumElectionTimeoutMS - MinimumElectionTimeoutMS))
+	d := int(MinimumElectionTimeoutMS) + n
 	return time.Duration(d) * time.Millisecond
 }
 
@@ -78,7 +78,7 @@ func electionTimeout() time.Duration {
 // broadcast from the leader. It is the minimum election timeout / 10, as
 // dictated by the spec: BroadcastInterval << ElectionTimeout << MTBF.
 func broadcastInterval() time.Duration {
-	d := MinimumElectionTimeoutMs / 10
+	d := MinimumElectionTimeoutMS / 10
 	return time.Duration(d) * time.Millisecond
 }
 
@@ -165,7 +165,7 @@ func NewServer(id uint64, store io.ReadWriter, a ApplyFunc) *Server {
 	}
 
 	// 5.2 Leader election: "the latest term this server has seen is persisted,
-	// and is initialized to 0 on first boot.""
+	// and is initialized to 0 on first boot."
 	log := newRaftLog(store, a)
 	latestTerm := log.lastTerm()
 
@@ -449,7 +449,7 @@ func (s *Server) candidateSelect() {
 	// receives no response for an RPC, it reissues the RPC repeatedly until a
 	// response arrives or the election concludes."
 
-	tuples, canceler := s.config.allPeers().except(s.id).requestVotes(requestVote{
+	requestVoteResponses, canceler := s.config.allPeers().except(s.id).requestVotes(requestVote{
 		Term:         s.term,
 		CandidateID:  s.id,
 		LastLogIndex: s.log.lastIndex(),
@@ -486,22 +486,22 @@ func (s *Server) candidateSelect() {
 		case t := <-s.configurationChan:
 			s.forwardConfiguration(t)
 
-		case t := <-tuples:
-			s.logGeneric("got vote: id=%d term=%d granted=%v", t.id, t.rvr.Term, t.rvr.VoteGranted)
+		case t := <-requestVoteResponses:
+			s.logGeneric("got vote: id=%d term=%d granted=%v", t.id, t.response.Term, t.response.VoteGranted)
 			// "A candidate wins the election if it receives votes from a
 			// majority of servers in the full cluster for the same term."
-			if t.rvr.Term > s.term {
-				s.logGeneric("got vote from future term (%d>%d); abandoning election", t.rvr.Term, s.term)
+			if t.response.Term > s.term {
+				s.logGeneric("got vote from future term (%d>%d); abandoning election", t.response.Term, s.term)
 				s.leader = unknownLeader
 				s.state.Set(follower)
 				s.vote = noVote
 				return // lose
 			}
-			if t.rvr.Term < s.term {
-				s.logGeneric("got vote from past term (%d<%d); ignoring", t.rvr.Term, s.term)
+			if t.response.Term < s.term {
+				s.logGeneric("got vote from past term (%d<%d); ignoring", t.response.Term, s.term)
 				break
 			}
-			if t.rvr.VoteGranted {
+			if t.response.VoteGranted {
 				s.logGeneric("%d voted for me", t.id)
 				votes[t.id] = true
 			}
@@ -543,7 +543,7 @@ func (s *Server) candidateSelect() {
 				return // lose
 			}
 
-		case <-s.electionTick: //  "a period of time goes by with no winner"
+		case <-s.electionTick:
 			// "The third possible outcome is that a candidate neither wins nor
 			// loses the election: if many followers become candidates at the
 			// same time, votes could be split so that no candidate obtains a
@@ -586,7 +586,7 @@ func (ni *nextIndex) bestIndex() uint64 {
 		return 0
 	}
 
-	var i uint64 = math.MaxUint64
+	i := uint64(math.MaxUint64)
 	for _, nextIndex := range ni.m {
 		if nextIndex < i {
 			i = nextIndex
@@ -736,7 +736,7 @@ func (s *Server) leaderSelect() {
 		panic(fmt.Sprintf("leader (%d) not me (%d) when entering leaderSelect", s.leader, s.id))
 	}
 	if s.vote != 0 {
-		panic(fmt.Sprintf("vote (%d) not zero when entering leaderSelect", s.leader, s.id))
+		panic(fmt.Sprintf("vote (%d) not zero when entering leaderSelect", s.leader))
 	}
 
 	// 5.3 Log replication: "The leader maintains a nextIndex for each follower,

@@ -316,7 +316,7 @@ func (p *httpPeer) rpc(request *bytes.Buffer, path string, response *bytes.Buffe
 		return err
 	}
 	if l := response.Len(); n < int64(l) {
-		return fmt.Errorf("Short read (%d < %d)", n, l)
+		return fmt.Errorf("short read (%d < %d)", n, l)
 	}
 
 	return nil

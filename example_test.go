@@ -3,9 +3,10 @@ package raft_test
 import (
 	"bytes"
 	"fmt"
-	"github.com/peterbourgon/raft"
 	"net/http"
 	"net/url"
+
+	"github.com/peterbourgon/raft"
 )
 
 func ExampleNewServer_hTTP() {
@@ -36,7 +37,7 @@ func ExampleNewServer_hTTP() {
 
 	// Expose the server using a HTTP transport
 	raft.HTTPTransport(http.DefaultServeMux, s)
-	go func() { http.ListenAndServe(":8080", nil) }()
+	go http.ListenAndServe(":8080", nil)
 
 	// Set the initial server configuration
 	s.SetConfiguration(

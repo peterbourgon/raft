@@ -110,7 +110,7 @@ func (pm peerMap) quorum() int {
 // the RPCs with a timeout of BroadcastInterval * 2 (chosen arbitrarily). Peers
 // that don't respond within the timeout are retried forever. The retry loop
 // stops only when all peers have responded, or a Cancel signal is sent via the
-// returned Canceler.
+// returned canceler.
 func (pm peerMap) requestVotes(r requestVote) (chan voteResponseTuple, canceler) {
 	// "[A server entering the candidate stage] issues requestVote RPCs in
 	// parallel to each of the other servers in the cluster. If the candidate
@@ -162,9 +162,9 @@ func (pm peerMap) requestVotes(r requestVote) (chan voteResponseTuple, canceler)
 }
 
 type voteResponseTuple struct {
-	id  uint64
-	rvr requestVoteResponse
-	err error
+	id       uint64
+	response requestVoteResponse
+	err      error
 }
 
 type canceler interface {

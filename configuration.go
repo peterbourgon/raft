@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	errConfigurationAlreadyChanging = errors.New("Configuration already changing")
+	errConfigurationAlreadyChanging = errors.New("configuration already changing")
 )
 
 const (
