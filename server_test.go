@@ -23,8 +23,8 @@ func init() {
 func TestFollowerToCandidate(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
-	defer resetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := resetElectionTimeoutMS(25, 50)
+	defer resetElectionTimeoutMS(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
 	server.SetConfiguration(
@@ -60,8 +60,8 @@ func TestFollowerToCandidate(t *testing.T) {
 func TestCandidateToLeader(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
-	defer resetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := resetElectionTimeoutMS(25, 50)
+	defer resetElectionTimeoutMS(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
 	server.SetConfiguration(
@@ -93,8 +93,8 @@ func TestCandidateToLeader(t *testing.T) {
 func TestFailedElection(t *testing.T) {
 	log.SetOutput(&bytes.Buffer{})
 	defer log.SetOutput(os.Stdout)
-	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
-	defer resetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := resetElectionTimeoutMS(25, 50)
+	defer resetElectionTimeoutMS(oldMin, oldMax)
 
 	server := NewServer(1, &bytes.Buffer{}, noop)
 	server.SetConfiguration(
@@ -125,8 +125,8 @@ func TestSimpleConsensus(t *testing.T) {
 	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
 	defer printOnFailure(t, logBuffer)
-	oldMin, oldMax := resetElectionTimeoutMs(25, 50)
-	defer resetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := resetElectionTimeoutMS(25, 50)
+	defer resetElectionTimeoutMS(oldMin, oldMax)
 
 	type SetValue struct {
 		Value int32 `json:"value"`
@@ -247,8 +247,8 @@ func testOrderTimeout(t *testing.T, nServers int, timeout time.Duration) {
 	log.SetOutput(logBuffer)
 	defer log.SetOutput(os.Stdout)
 	defer printOnFailure(t, logBuffer)
-	oldMin, oldMax := resetElectionTimeoutMs(50, 100)
-	defer resetElectionTimeoutMs(oldMin, oldMax)
+	oldMin, oldMax := resetElectionTimeoutMS(50, 100)
+	defer resetElectionTimeoutMS(oldMin, oldMax)
 
 	done := make(chan struct{})
 	go func() { testOrder(t, nServers); close(done) }()

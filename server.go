@@ -40,15 +40,15 @@ var (
 	errNotLeader             = errors.New("not the leader")
 	errUnknownLeader         = errors.New("unknown leader")
 	errDeposed               = errors.New("deposed during replication")
-	errappendEntriesRejected = errors.New("appendEntries RPC rejected")
+	errAppendEntriesRejected = errors.New("appendEntries RPC rejected")
 	errReplicationFailed     = errors.New("command replication failed (but will keep retrying)")
 	errOutOfSync             = errors.New("out of sync")
 	errAlreadyRunning        = errors.New("already running")
 )
 
-// resetElectionTimeoutMs sets the minimum and maximum election timeouts to the
+// resetElectionTimeoutMS sets the minimum and maximum election timeouts to the
 // passed values, and returns the old values.
-func resetElectionTimeoutMs(newMin, newMax int) (int, int) {
+func resetElectionTimeoutMS(newMin, newMax int) (int, int) {
 	oldMin := atomic.LoadInt32(&MinimumElectionTimeoutMS)
 	oldMax := atomic.LoadInt32(&maximumElectionTimeoutMS)
 	atomic.StoreInt32(&MinimumElectionTimeoutMS, int32(newMin))
@@ -200,6 +200,13 @@ type configurationTuple struct {
 // SetConfiguration must be called before starting the server. Calls to
 // SetConfiguration after the server has been started will be replicated
 // throughout the Raft network using the joint-consensus mechanism.
+//
+// TODO we need to refactor how we parse entries: a single code path from any
+// source (snapshot, persisted log at startup, or over the network) into the
+// log, and as part of that flow, checking if the entry is a configuration and
+// emitting it to the configuration structure. This implies an unfortunate
+// coupling: whatever processes log entries must have both the configuration
+// and the log as data sinks.
 func (s *Server) SetConfiguration(peers ...Peer) error {
 	if !s.running.Get() {
 		s.config.directSet(makePeerMap(peers...))
@@ -304,7 +311,7 @@ func (s *Server) logGeneric(format string, args ...interface{}) {
 	log.Printf(prefix+format, args...)
 }
 
-func (s *Server) logappendEntriesResponse(req appendEntries, resp appendEntriesResponse, stepDown bool) {
+func (s *Server) logAppendEntriesResponse(req appendEntries, resp appendEntriesResponse, stepDown bool) {
 	s.logGeneric(
 		"got appendEntries, sz=%d leader=%d prevIndex/Term=%d/%d commitIndex=%d: responded with success=%v (reason='%s') stepDown=%v",
 		len(req.Entries),
@@ -409,7 +416,7 @@ func (s *Server) followerSelect() {
 				s.logGeneric("discovered Leader %d", s.leader)
 			}
 			resp, stepDown := s.handleAppendEntries(t.Request)
-			s.logappendEntriesResponse(t.Request, resp, stepDown)
+			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
 				// stepDown as a Follower means just to reset the leader
@@ -522,7 +529,7 @@ func (s *Server) candidateSelect() {
 			// recognizes the leader as legitimate and steps down, meaning
 			// that it returns to follower state."
 			resp, stepDown := s.handleAppendEntries(t.Request)
-			s.logappendEntriesResponse(t.Request, resp, stepDown)
+			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
 				s.logGeneric("after an appendEntries, stepping down to Follower (leader=%d)", t.Request.LeaderID)
@@ -679,7 +686,7 @@ func (s *Server) flush(peer Peer, ni *nextIndex) error {
 			return err
 		}
 		s.logGeneric("flush to %d: rejected; prevLogIndex(%d) becomes %d", peerID, peerID, newPrevLogIndex)
-		return errappendEntriesRejected
+		return errAppendEntriesRejected
 	}
 
 	if len(entries) > 0 {
@@ -896,7 +903,7 @@ func (s *Server) leaderSelect() {
 
 		case t := <-s.appendEntriesChan:
 			resp, stepDown := s.handleAppendEntries(t.Request)
-			s.logappendEntriesResponse(t.Request, resp, stepDown)
+			s.logAppendEntriesResponse(t.Request, resp, stepDown)
 			t.Response <- resp
 			if stepDown {
 				s.logGeneric("after an appendEntries, deposed to Follower (leader=%d)", t.Request.LeaderID)
